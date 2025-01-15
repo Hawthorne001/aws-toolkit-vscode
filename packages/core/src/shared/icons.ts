@@ -3,22 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import globals from './extensionGlobals'
+import globals, { isWeb } from './extensionGlobals'
 
 import type * as packageJson from '../../package.json'
-import * as fs from 'fs'
+import * as fs from 'fs' // eslint-disable-line no-restricted-imports
 import * as path from 'path'
 import { Uri, ThemeIcon, ThemeColor } from 'vscode'
 import { isCloud9 } from './extensionUtilities'
 import { memoize } from './utilities/functionUtils'
 import { getLogger } from './logger/logger'
-import { isWeb } from '../common/webUtils'
 
 // Animation:
 // https://code.visualstudio.com/api/references/icons-in-labels#animation
 
 type ContributedIcon = keyof typeof packageJson.contributes.icons
-type IconPath = { light: Uri; dark: Uri } | Icon
+export type IconPath = { light: Uri; dark: Uri; toString: () => string } | Icon
 type IconId = `vscode-${string}` | ContributedIcon
 
 /**
@@ -47,7 +46,7 @@ export const getIcon = memoize(resolveIconId)
  */
 export function codicon(parts: TemplateStringsArray, ...components: (string | IconPath)[]): string {
     const canUse = (sub: string | IconPath) => typeof sub === 'string' || (!isCloud9() && sub instanceof Icon)
-    const resolved = components.map(i => (canUse(i) ? i : '')).map(String)
+    const resolved = components.map((i) => (canUse(i) ? i : '')).map(String)
 
     return parts
         .map((v, i) => `${v}${i < resolved.length ? resolved[i] : ''}`)
@@ -61,7 +60,11 @@ export function codicon(parts: TemplateStringsArray, ...components: (string | Ic
  * Used to expose the icon identifier which is otherwise hidden.
  */
 export class Icon extends ThemeIcon {
-    public constructor(id: string, public readonly source?: Uri, color?: ThemeColor) {
+    public constructor(
+        id: string,
+        public readonly source?: Uri,
+        color?: ThemeColor
+    ) {
         super(id, color)
     }
 
@@ -118,13 +121,17 @@ function resolveIconId(
     return new Icon(namespace === 'vscode' ? name : id, source)
 }
 
-function resolvePathsSync(rootDir: string, target: string): { light: Uri; dark: Uri } | undefined {
-    const darkPath = path.join(rootDir, 'dark', `${target}.svg`)
-    const lightPath = path.join(rootDir, 'light', `${target}.svg`)
+function resolvePathsSync(
+    rootDir: string,
+    target: string
+): { light: Uri; dark: Uri; toString: () => string } | undefined {
+    const filename = `${target}.svg`
+    const darkPath = path.join(rootDir, 'dark', filename)
+    const lightPath = path.join(rootDir, 'light', filename)
 
     try {
         if (!isWeb() && fs.existsSync(darkPath) && fs.existsSync(lightPath)) {
-            return { dark: Uri.file(darkPath), light: Uri.file(lightPath) }
+            return { dark: Uri.file(darkPath), light: Uri.file(lightPath), toString: () => filename }
         }
     } catch (error) {
         getLogger().warn(`icons: path resolution failed for "${target}": %s`, error)

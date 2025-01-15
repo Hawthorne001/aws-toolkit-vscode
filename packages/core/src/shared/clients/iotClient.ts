@@ -26,7 +26,7 @@ export type IotPolicy = IotThing
 export type IotClient = InterfaceNoSymbol<DefaultIotClient>
 
 const iotServiceArn = 'iot'
-//Pattern to extract the certificate ID from the parsed ARN resource.
+// Pattern to extract the certificate ID from the parsed ARN resource.
 const certArnResourcePattern = /cert\/(\w+)/
 
 export interface ListThingCertificatesResponse {
@@ -167,7 +167,7 @@ export class DefaultIotClient {
         const iotPrincipals: Iot.Principal[] = output.principals ?? []
         const nextToken = output.nextToken
 
-        const describedCerts = iotPrincipals.map(async iotPrincipal => {
+        const describedCerts = iotPrincipals.map(async (iotPrincipal) => {
             const principalArn = parse(iotPrincipal)
             const certIdFound = principalArn.resource.match(certArnResourcePattern)
             if (principalArn.service !== iotServiceArn || !certIdFound) {
@@ -178,8 +178,8 @@ export class DefaultIotClient {
         })
 
         const resolvedCerts = (await Promise.all(describedCerts))
-            .filter(cert => cert?.certificateDescription !== undefined)
-            .map(cert => cert?.certificateDescription as Iot.CertificateDescription)
+            .filter((cert) => cert?.certificateDescription !== undefined)
+            .map((cert) => cert?.certificateDescription as Iot.CertificateDescription)
 
         const response: ListThingCertificatesResponse = { certificates: resolvedCerts, nextToken: nextToken }
         getLogger().debug('ListThingCertificates returned response: %O', response)

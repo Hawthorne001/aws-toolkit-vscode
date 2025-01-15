@@ -11,6 +11,8 @@ import { subscribeOnce } from '../../shared/utilities/vsCodeUtils'
 import { Container } from '../service/serviceContainer'
 import { RecommendationHandler } from '../service/recommendationHandler'
 import { cancellableDebounce } from '../../shared/utilities/functionUtils'
+import { telemetry } from '../../shared/telemetry'
+import { TelemetryHelper } from '../util/telemetryHelper'
 
 export class ActiveStateController implements vscode.Disposable {
     private readonly _disposable: vscode.Disposable
@@ -20,7 +22,7 @@ export class ActiveStateController implements vscode.Disposable {
         vscode.window.createTextEditorDecorationType({
             after: {
                 margin: '0 0 0 3em',
-                contentText: 'CodeWhisperer is generating...',
+                contentText: 'Amazon Q is generating...',
                 textDecoration: 'none',
                 fontWeight: 'normal',
                 fontStyle: 'normal',
@@ -32,19 +34,21 @@ export class ActiveStateController implements vscode.Disposable {
 
     constructor(private readonly container: Container) {
         this._disposable = vscode.Disposable.from(
-            RecommendationService.instance.suggestionActionEvent(async e => {
-                await this.onSuggestionActionEvent(e)
+            RecommendationService.instance.suggestionActionEvent(async (e) => {
+                await telemetry.withTraceId(async () => {
+                    await this.onSuggestionActionEvent(e)
+                }, TelemetryHelper.instance.traceId)
             }),
-            RecommendationHandler.instance.onDidReceiveRecommendation(async _ => {
+            RecommendationHandler.instance.onDidReceiveRecommendation(async (_) => {
                 await this.onDidReceiveRecommendation()
             }),
-            this.container.lineTracker.onDidChangeActiveLines(async e => {
+            this.container.lineTracker.onDidChangeActiveLines(async (e) => {
                 await this.onActiveLinesChanged(e)
             }),
-            subscribeOnce(this.container.lineTracker.onReady)(async _ => {
+            subscribeOnce(this.container.lineTracker.onReady)(async (_) => {
                 await this.onReady()
             }),
-            this.container.auth.auth.onDidChangeConnectionState(async e => {
+            this.container.auth.auth.onDidChangeConnectionState(async (e) => {
                 if (e.state !== 'authenticating') {
                     await this._refresh(vscode.window.activeTextEditor)
                 }
@@ -114,11 +118,6 @@ export class ActiveStateController implements vscode.Disposable {
     }, 1000)
 
     private async _refresh(editor: vscode.TextEditor | undefined, shouldDisplay?: boolean) {
-        if (!this.container.auth.isConnectionValid()) {
-            this.clear(this._editor)
-            return
-        }
-
         if (!editor && !this._editor) {
             return
         }
@@ -137,6 +136,11 @@ export class ActiveStateController implements vscode.Disposable {
 
         // Make sure the editor hasn't died since the await above and that we are still on the same line(s)
         if (!editor.document || !this.container.lineTracker.includes(selections)) {
+            return
+        }
+
+        if (!this.container.auth.isConnectionValid()) {
+            this.clear(this._editor)
             return
         }
 

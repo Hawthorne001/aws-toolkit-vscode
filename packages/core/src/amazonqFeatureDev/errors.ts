@@ -5,28 +5,28 @@
 
 import { ToolkitError } from '../shared/errors'
 import { featureName } from './constants'
+import { uploadCodeError } from './userFacingText'
+import { i18n } from '../shared/i18n-helper'
 
 export class ConversationIdNotFoundError extends ToolkitError {
     constructor() {
-        super('Conversation id must exist before starting code generation', { code: 'ConversationIdNotFound' })
+        super(i18n('AWS.amazonq.featureDev.error.conversationIdNotFoundError'), {
+            code: 'ConversationIdNotFound',
+        })
     }
 }
 
 export class TabIdNotFoundError extends ToolkitError {
-    constructor(query: string) {
-        super(`Tab id was not found from ${query}`, { code: 'TabIdNotFound' })
-    }
-}
-
-export class PanelLoadError extends ToolkitError {
     constructor() {
-        super(`${featureName} UI panel failed to load`, { code: 'PanelLoadFailed' })
+        super(i18n('AWS.amazonq.featureDev.error.tabIdNotFoundError'), {
+            code: 'TabIdNotFound',
+        })
     }
 }
 
 export class WorkspaceFolderNotFoundError extends ToolkitError {
     constructor() {
-        super(`Workspace folder was not found. Open a workspace to continue using ${featureName}`, {
+        super(i18n('AWS.amazonq.featureDev.error.workspaceFolderNotFoundError'), {
             code: 'WorkspaceFolderNotFound',
         })
     }
@@ -34,45 +34,89 @@ export class WorkspaceFolderNotFoundError extends ToolkitError {
 
 export class UserMessageNotFoundError extends ToolkitError {
     constructor() {
-        super(`Message was not found`, { code: 'MessageNotFound' })
+        super(i18n('AWS.amazonq.featureDev.error.userMessageNotFoundError'), {
+            code: 'MessageNotFound',
+        })
     }
 }
 
 export class SelectedFolderNotInWorkspaceFolderError extends ToolkitError {
     constructor() {
-        super(
-            `The selected folder is not in an opened workspace folder. Add the selected folder to the workspace or pick a new folder`,
-            {
-                code: 'SelectedFolderNotInWorkspaceFolder',
-            }
-        )
+        super(i18n('AWS.amazonq.featureDev.error.selectedFolderNotInWorkspaceFolderError'), {
+            code: 'SelectedFolderNotInWorkspaceFolder',
+        })
+    }
+}
+
+export class PromptRefusalException extends ToolkitError {
+    constructor() {
+        super(i18n('AWS.amazonq.featureDev.error.promptRefusalException'), {
+            code: 'PromptRefusalException',
+        })
+    }
+}
+
+export class NoChangeRequiredException extends ToolkitError {
+    constructor() {
+        super(i18n('AWS.amazonq.featureDev.error.noChangeRequiredException'), {
+            code: 'NoChangeRequiredException',
+        })
+    }
+}
+
+export class FeatureDevServiceError extends ToolkitError {
+    constructor(message: string, code: string) {
+        super(message, { code })
     }
 }
 
 export class PrepareRepoFailedError extends ToolkitError {
     constructor() {
-        super('Unable to prepare repository for uploading', { code: 'PrepareRepoFailed' })
+        super(i18n('AWS.amazonq.featureDev.error.prepareRepoFailedError'), {
+            code: 'PrepareRepoFailed',
+        })
     }
 }
 
 export class UploadCodeError extends ToolkitError {
     constructor(statusCode: string) {
-        super('Unable to upload code', { code: `UploadCode-${statusCode}` })
+        super(uploadCodeError, { code: `UploadCode-${statusCode}` })
+    }
+}
+
+export class UploadURLExpired extends ToolkitError {
+    constructor() {
+        super(i18n('AWS.amazonq.featureDev.error.uploadURLExpired'), { code: 'UploadURLExpired' })
     }
 }
 
 export class IllegalStateTransition extends ToolkitError {
     constructor() {
-        super('Illegal transition between states, restart the conversation', { code: 'IllegalStateTransition' })
+        super(i18n('AWS.amazonq.featureDev.error.illegalStateTransition'), { code: 'IllegalStateTransition' })
     }
 }
 
 export class ContentLengthError extends ToolkitError {
     constructor() {
-        super(
-            'The project you have selected for source code is too large to use as context. Please select a different folder to use for this conversation',
-            { code: 'ContentLengthError' }
-        )
+        super(i18n('AWS.amazonq.featureDev.error.contentLengthError'), { code: ContentLengthError.name })
+    }
+}
+
+export class ZipFileError extends ToolkitError {
+    constructor() {
+        super(i18n('AWS.amazonq.featureDev.error.zipFileError'), { code: ZipFileError.name })
+    }
+}
+
+export class CodeIterationLimitError extends ToolkitError {
+    constructor() {
+        super(i18n('AWS.amazonq.featureDev.error.codeIterationLimitError'), { code: CodeIterationLimitError.name })
+    }
+}
+
+export class MonthlyConversationLimitError extends ToolkitError {
+    constructor(message: string) {
+        super(message, { code: MonthlyConversationLimitError.name })
     }
 }
 
@@ -88,10 +132,10 @@ export class ApiError extends ToolkitError {
     }
 }
 
-const denyListedErrors: string[] = ['Deserialization error', 'Inaccessible host']
+export const denyListedErrors: string[] = ['Deserialization error', 'Inaccessible host']
 
 export function createUserFacingErrorMessage(message: string) {
-    if (denyListedErrors.some(err => message.includes(err))) {
+    if (denyListedErrors.some((err) => message.includes(err))) {
         return `${featureName} API request failed`
     }
     return message

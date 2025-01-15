@@ -174,7 +174,8 @@ export abstract class VueWebview {
 
         this.protocol = commands
 
-        // Will be sent to the dist/vue folder by webpack
+        // All vue files defined by `source` are collected in to `dist/vue`
+        // so we must update the relative paths to point here
         const sourcePath = vscode.Uri.joinPath(vscode.Uri.parse('vue/'), source).path
         this.source = sourcePath[0] === '/' ? sourcePath.slice(1) : sourcePath // VSCode URIs like to create root paths...
     }
@@ -207,7 +208,10 @@ export abstract class VueWebview {
             private readonly instance: InstanceType<T>
             private panel?: vscode.WebviewPanel
 
-            public constructor(protected readonly context: vscode.ExtensionContext, ...args: ConstructorParameters<T>) {
+            public constructor(
+                protected readonly context: vscode.ExtensionContext,
+                ...args: ConstructorParameters<T>
+            ) {
                 this.instance = new target(...args) as InstanceType<T>
 
                 for (const [prop, val] of Object.entries(this.instance)) {
@@ -265,7 +269,10 @@ export abstract class VueWebview {
 
             public readonly onDidResolveView = this.onDidResolveViewEmitter.event
 
-            public constructor(protected readonly context: vscode.ExtensionContext, ...args: ConstructorParameters<T>) {
+            public constructor(
+                protected readonly context: vscode.ExtensionContext,
+                ...args: ConstructorParameters<T>
+            ) {
                 this.instance = new target(...args) as InstanceType<T>
 
                 for (const [prop, val] of Object.entries(this.instance)) {
@@ -283,7 +290,7 @@ export abstract class VueWebview {
 
             public register(params: Omit<WebviewViewParams, 'id' | 'webviewJs'>): vscode.Disposable {
                 return vscode.window.registerWebviewViewProvider(this.instance.id, {
-                    resolveWebviewView: async view => {
+                    resolveWebviewView: async (view) => {
                         view.title = params.title ?? view.title
                         view.description = params.description ?? view.description
                         updateWebview(this.context, view.webview, {
@@ -342,7 +349,7 @@ function createWebviewPanel(ctx: vscode.ExtensionContext, params: WebviewPanelPa
     const viewColumn =
         isCloud9() && params.viewColumn === vscode.ViewColumn.Beside
             ? vscode.ViewColumn.Two
-            : params.viewColumn ?? vscode.ViewColumn.Active
+            : (params.viewColumn ?? vscode.ViewColumn.Active)
 
     const panel = vscode.window.createWebviewPanel(
         params.id,
@@ -362,7 +369,7 @@ function createWebviewPanel(ctx: vscode.ExtensionContext, params: WebviewPanelPa
 }
 
 function resolveRelative(webview: vscode.Webview, rootUri: vscode.Uri, files: string[]): vscode.Uri[] {
-    return files.map(f => webview.asWebviewUri(vscode.Uri.joinPath(rootUri, f)))
+    return files.map((f) => webview.asWebviewUri(vscode.Uri.joinPath(rootUri, f)))
 }
 
 /**
@@ -392,8 +399,8 @@ function updateWebview(ctx: vscode.ExtensionContext, webview: vscode.Webview, pa
     const mainScript = webview.asWebviewUri(vscode.Uri.joinPath(dist, params.webviewJs))
 
     webview.html = resolveWebviewHtml({
-        scripts: libs.map(p => `<script src="${p}"></script>`).join('\n'),
-        stylesheets: css.map(p => `<link rel="stylesheet" href="${p}">\n`).join('\n'),
+        scripts: libs.map((p) => `<script src="${p}"></script>`).join('\n'),
+        stylesheets: css.map((p) => `<link rel="stylesheet" href="${p}">\n`).join('\n'),
         main: mainScript,
         webviewJs: params.webviewJs,
         cspSource: updateCspSource(webview.cspSource),

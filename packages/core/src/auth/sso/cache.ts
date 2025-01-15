@@ -3,17 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import * as vscode from 'vscode'
 import * as crypto from 'crypto'
 import * as path from 'path'
 import { getLogger } from '../../shared/logger/logger'
+import fs from '../../shared/fs/fs'
 import { createDiskCache, KeyedCache, mapCache } from '../../shared/utilities/cacheUtils'
 import { stripUndefined } from '../../shared/utilities/collectionUtils'
 import { hasProps, selectFrom } from '../../shared/utilities/tsUtils'
 import { SsoToken, ClientRegistration } from './model'
-import { SystemUtilities } from '../../shared/systemUtilities'
 import { DevSettings } from '../../shared/settings'
+import { onceChanged } from '../../shared/utilities/functionUtils'
+import globals from '../../shared/extensionGlobals'
+import { ToolkitError } from '../../shared/errors'
 
 interface RegistrationKey {
+    readonly startUrl: string
     readonly region: string
     readonly scopes?: string[]
 }
@@ -30,7 +35,7 @@ export interface SsoCache {
     readonly registration: KeyedCache<ClientRegistration, RegistrationKey>
 }
 
-const defaultCacheDir = () => path.join(SystemUtilities.getHomeDirectory(), '.aws', 'sso', 'cache')
+const defaultCacheDir = () => path.join(fs.getUserHomeDir(), '.aws/sso/cache')
 export const getCacheDir = () => DevSettings.instance.get('ssoCacheDirectory', defaultCacheDir())
 
 export function getCache(directory = getCacheDir()): SsoCache {
@@ -38,6 +43,12 @@ export function getCache(directory = getCacheDir()): SsoCache {
         token: getTokenCache(directory),
         registration: getRegistrationCache(directory),
     }
+}
+
+export function getCacheFileWatcher(directory = getCacheDir()) {
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(directory, '*.json'))
+    globals.context.subscriptions.push(watcher)
+    return watcher
 }
 
 export function getRegistrationCache(directory = getCacheDir()): KeyedCache<ClientRegistration, RegistrationKey> {
@@ -68,9 +79,14 @@ export function getTokenCache(directory = getCacheDir()): KeyedCache<SsoAccess> 
         }
 
     function read(data: StoredToken): SsoAccess {
+        // Validate data is not missing. Since the input data is passed directly from whatever is on disk.
+        if (!hasProps(data, 'accessToken')) {
+            throw new ToolkitError(`SSO cache data looks malformed`)
+        }
+
         const registration = hasProps(data, 'clientId', 'clientSecret', 'registrationExpiresAt')
             ? {
-                  ...selectFrom(data, 'clientId', 'clientSecret', 'scopes'),
+                  ...selectFrom(data, 'clientId', 'clientSecret', 'scopes', 'startUrl'),
                   expiresAt: new Date(data.registrationExpiresAt),
               }
             : undefined
@@ -104,8 +120,8 @@ export function getTokenCache(directory = getCacheDir()): KeyedCache<SsoAccess> 
         }
     }
 
-    const logger = (message: string) => getLogger().debug(`SSO token cache: ${message}`)
-    const cache = createDiskCache<StoredToken, string>((key: string) => getTokenCacheFile(directory, key), logger)
+    const logIfChanged = onceChanged((message: string) => getLogger().debug(`SSO token cache: ${message}`))
+    const cache = createDiskCache<StoredToken, string>((key: string) => getTokenCacheFile(directory, key), logIfChanged)
 
     return mapCache(cache, read, write)
 }
@@ -130,12 +146,15 @@ function getTokenCacheFile(ssoCacheDir: string, key: string): string {
 }
 
 function getRegistrationCacheFile(ssoCacheDir: string, key: RegistrationKey): string {
-    const hashScopes = (scopes: string[]) => {
+    const hash = (startUrl: string, scopes: string[]) => {
         const shasum = crypto.createHash('sha256')
-        scopes.forEach(s => shasum.update(s))
+        shasum.update(startUrl)
+        for (const s of scopes) {
+            shasum.update(s)
+        }
         return shasum.digest('hex')
     }
 
-    const suffix = `${key.region}${key.scopes && key.scopes.length > 0 ? `-${hashScopes(key.scopes)}` : ''}`
+    const suffix = `${key.region}${key.scopes && key.scopes.length > 0 ? `-${hash(key.startUrl, key.scopes)}` : ''}`
     return path.join(ssoCacheDir, `aws-toolkit-vscode-client-id-${suffix}.json`)
 }

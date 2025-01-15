@@ -17,8 +17,6 @@ import { ClassifierTrigger } from './classifierTrigger'
 import { extractContextForCodeWhisperer } from '../util/editorContext'
 import { RecommendationService } from './recommendationService'
 
-const performance = globalThis.performance ?? require('perf_hooks').performance
-
 /**
  * This class is for CodeWhisperer auto trigger
  */
@@ -65,7 +63,7 @@ export class KeyStrokeHandler {
             }
 
             this.invokeAutomatedTrigger('IdleTime', editor, client, config, event)
-                .catch(e => {
+                .catch((e) => {
                     getLogger().error('invokeAutomatedTrigger failed: %s', (e as Error).message)
                 })
                 .finally(() => {
@@ -166,6 +164,7 @@ export class KeyStrokeHandler {
         if (!editor) {
             return
         }
+
         // RecommendationHandler.instance.reportUserDecisionOfRecommendation(editor, -1)
         await RecommendationService.instance.generateRecommendation(
             client,

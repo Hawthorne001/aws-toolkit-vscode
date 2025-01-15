@@ -31,6 +31,7 @@ import {
     joinAll,
     isPresent,
     partialClone,
+    inspect,
 } from '../../../shared/utilities/collectionUtils'
 
 import { asyncGenerator } from '../../../shared/utilities/collectionUtils'
@@ -151,21 +152,24 @@ describe('CollectionUtils', async function () {
 
             assert.ok(result)
             assert.strictEqual(result.length, 2)
-            assert.ok(result.find(item => item === 'a'))
-            assert.ok(result.find(item => item === 'b'))
+            assert.ok(result.find((item) => item === 'a'))
+            assert.ok(result.find((item) => item === 'b'))
         })
     })
 
     describe('toMap', async function () {
         it('returns an empty map if the input is empty', async function () {
-            const result = toMap<string, { key: string }>([], item => item.key)
+            const result = toMap<string, { key: string }>([], (item) => item.key)
 
             assert.ok(result)
             assert.strictEqual(result.size, 0)
         })
 
         it('uses selector to choose keys', async function () {
-            const result = toMap<string, { key: string }>([{ key: 'a' }, { key: 'b' }, { key: 'c' }], item => item.key)
+            const result = toMap<string, { key: string }>(
+                [{ key: 'a' }, { key: 'b' }, { key: 'c' }],
+                (item) => item.key
+            )
 
             assert.ok(result)
             assert.strictEqual(result.size, 3)
@@ -178,7 +182,7 @@ describe('CollectionUtils', async function () {
             assert.throws(() =>
                 toMap<string, { key: string }>(
                     [{ key: 'a' }, { key: 'b' }, { key: 'b' }, { key: 'c' }],
-                    item => item.key
+                    (item) => item.key
                 )
             )
         })
@@ -186,7 +190,7 @@ describe('CollectionUtils', async function () {
 
     describe('toMapAsync', async function () {
         it('returns an empty map if the input is empty', async function () {
-            const result = await toMapAsync<string, { key: string }>(asyncGenerator([]), item => item.key)
+            const result = await toMapAsync<string, { key: string }>(asyncGenerator([]), (item) => item.key)
 
             assert.ok(result)
             assert.strictEqual(result.size, 0)
@@ -195,7 +199,7 @@ describe('CollectionUtils', async function () {
         it('uses selector to choose keys', async function () {
             const result = await toMapAsync(
                 asyncGenerator([{ key: 'a' }, { key: 'b' }, { key: 'c' }]),
-                item => item.key
+                (item) => item.key
             )
 
             assert.ok(result)
@@ -209,7 +213,7 @@ describe('CollectionUtils', async function () {
             await assert.rejects(
                 toMapAsync<string, { key: string }>(
                     asyncGenerator([{ key: 'a' }, { key: 'b' }, { key: 'b' }, { key: 'c' }]),
-                    item => item.key
+                    (item) => item.key
                 )
             )
         })
@@ -223,8 +227,8 @@ describe('CollectionUtils', async function () {
             updateInPlace(
                 map,
                 [],
-                key => assert.fail(),
-                key => assert.fail()
+                (key) => assert.fail(),
+                (key) => assert.fail()
             )
 
             assert.ok(map)
@@ -239,11 +243,11 @@ describe('CollectionUtils', async function () {
             updateInPlace(
                 map,
                 ['b'],
-                key => {
+                (key) => {
                     assert.strictEqual(key, 'b')
                     map.set(key, 42)
                 },
-                key => assert.fail()
+                (key) => assert.fail()
             )
 
             assert.ok(map)
@@ -257,8 +261,8 @@ describe('CollectionUtils', async function () {
             updateInPlace(
                 map,
                 ['a'],
-                key => assert.fail(),
-                key => {
+                (key) => assert.fail(),
+                (key) => {
                     assert.strictEqual(key, 'a')
 
                     return 42
@@ -342,7 +346,7 @@ describe('CollectionUtils', async function () {
     describe('filter', async function () {
         it('returns the original sequence filtered by the predicate', async function () {
             const input: Iterable<number> = [1, 2]
-            const result = filter(input, i => i % 2 === 0)
+            const result = filter(input, (i) => i % 2 === 0)
 
             assert.ok(result)
             assert.strictEqual(result.length, 1)
@@ -352,7 +356,7 @@ describe('CollectionUtils', async function () {
 
     describe('filterAsync', async function () {
         it('returns the original sequence filtered by the predicate', async function () {
-            const result = await toArrayAsync(filterAsync([1, 2], async i => i % 2 === 0))
+            const result = await toArrayAsync(filterAsync([1, 2], async (i) => i % 2 === 0))
 
             assert.ok(result)
             assert.strictEqual(result.length, 1)
@@ -392,7 +396,7 @@ describe('CollectionUtils', async function () {
                 CloudWatchLogs.DescribeLogStreamsRequest,
                 CloudWatchLogs.DescribeLogStreamsResponse
             > = {
-                awsCall: async req => fakeCall(req),
+                awsCall: async (req) => fakeCall(req),
                 nextTokenNames: {
                     request: 'nextToken',
                     response: 'nextToken',
@@ -423,7 +427,7 @@ describe('CollectionUtils', async function () {
             }
             const populator = new IteratorTransformer<string, vscode.QuickPickItem>(
                 () => iteratorFn(),
-                val => {
+                (val) => {
                     if (val) {
                         return [{ label: val.toUpperCase() }]
                     }
@@ -508,7 +512,7 @@ describe('CollectionUtils', async function () {
         const requester = async (request: { next?: string }) => pages[request.next ?? 'page1']
 
         it('creates a new AsyncCollection', async function () {
-            const collection = pageableToCollection(requester, {}, 'next', 'data')
+            const collection = pageableToCollection(requester, {}, 'next' as never, 'data')
             assert.deepStrictEqual(await collection.promise(), [[0, 1, 2], [3, 4], [5], []])
         })
 
@@ -537,14 +541,14 @@ describe('CollectionUtils', async function () {
 
         describe('last', function () {
             it('it persists last element when mapped', async function () {
-                const collection = pageableToCollection(requester, {}, 'next', 'data')
-                const mapped = collection.map(i => i[0] ?? -1)
+                const collection = pageableToCollection(requester, {}, 'next' as never, 'data')
+                const mapped = collection.map((i) => i[0] ?? -1)
                 assert.strictEqual(await last(mapped), -1)
             })
         })
     })
 
-    const promise = <T>(val: T) => new Promise<T>(resolve => setImmediate(() => resolve(val)))
+    const promise = <T>(val: T) => new Promise<T>((resolve) => setImmediate(() => resolve(val)))
     const cons = <T, U>(arr: Promise<T>[], next: U) => {
         if (arr.length === 0) {
             return [promise(next)]
@@ -611,8 +615,8 @@ describe('CollectionUtils', async function () {
         async function run<T>(testCase: TestCase<T>) {
             const expected = testCase.expected ?? testCase.data
             const arr = toPromiseChain(testCase.data)
-            const left = toAsyncIterable(testCase.left.map(i => arr[i]))
-            const right = toAsyncIterable(testCase.right.map(i => arr[i]))
+            const left = toAsyncIterable(testCase.left.map((i) => arr[i]))
+            const right = toAsyncIterable(testCase.right.map((i) => arr[i]))
 
             assert.deepStrictEqual(await iterateAll(join(left, right)), expected)
         }
@@ -660,7 +664,7 @@ describe('CollectionUtils', async function () {
             it('resolves an async iterable of async iterables', async function () {
                 const data = [[0, 1], [2], [3, 4, 5]]
                 const expected = [0, 2, 3, 1, 4, 5]
-                const iterables = data.map(toPromiseChain).map(arr => toAsyncIterable(arr))
+                const iterables = data.map(toPromiseChain).map((arr) => toAsyncIterable(arr))
                 const iterable = joinAll(toAsyncIterable(iterables))
                 assert.deepStrictEqual(await iterateAll(iterable), expected)
             })
@@ -673,6 +677,36 @@ describe('CollectionUtils', async function () {
         })
         it('returns false for undefined', function () {
             assert.strictEqual(isPresent<string>(undefined), false)
+        })
+    })
+
+    describe('inspect', function () {
+        let testData: any
+        before(function () {
+            testData = {
+                root: {
+                    A: {
+                        B: {
+                            C: {
+                                D: {
+                                    E: 'data',
+                                },
+                            },
+                        },
+                    },
+                },
+            }
+        })
+
+        it('defaults to a depth of 3', function () {
+            assert.strictEqual(inspect(testData), '{\n  root: { A: { B: { C: [Object] } } }\n}')
+        })
+
+        it('allows depth to be set manually', function () {
+            assert.strictEqual(
+                inspect(testData, { depth: 6 }),
+                "{\n  root: {\n    A: {\n      B: { C: { D: { E: 'data' } } }\n    }\n  }\n}"
+            )
         })
     })
 

@@ -5,7 +5,6 @@
 
 import { TextEditor, Selection, TextDocument, Range } from 'vscode'
 
-import { Extent, Java, Python, Tsx, TypeScript, Location } from '@aws/fully-qualified-names'
 import { FocusAreaContext, FullyQualifiedName } from './model'
 
 const focusAreaCharLimit = 9_000
@@ -36,11 +35,13 @@ export class FocusAreaContextExtractor {
 
         // It means we don't really have a selection, but cursor position only
         if (!this.isCodeBlockSelected(editor)) {
-            importantRange = editor.visibleRanges[0]
+            // Select the whole line
+            importantRange = editor.document.lineAt(importantRange.start.line).range
         }
 
-        const names = await this.findNamesInRange(editor.document.getText(), importantRange, editor.document.languageId)
-
+        //  TODO: call findNamesWithInExtent from @aws/fully-qualified-names
+        //  after promise not resolving issue is fixed
+        const names = {}
         const [simpleNames] = this.prepareSimpleNames(names)
         const [usedFullyQualifiedNames] = this.prepareFqns(names)
 
@@ -56,7 +57,7 @@ export class FocusAreaContextExtractor {
             extendedCodeBlock: this.getRangeText(editor.document, extendedCodeBlockRange),
             codeBlock: codeBlock,
             selectionInsideExtendedCodeBlock: this.getSelectionInsideExtendedCodeBlock(
-                importantRange as Selection,
+                editor.selection,
                 extendedCodeBlockRange
             ),
             names:
@@ -209,6 +210,7 @@ export class FocusAreaContextExtractor {
                         range.end.line,
                         charLimit - selectionSizeWithoutLastLine - 1
                     )
+                    return range
                 }
             }
         }
@@ -218,33 +220,6 @@ export class FocusAreaContextExtractor {
 
     private getRangeText(document: TextDocument, range: Range): string {
         return document.getText(range)
-    }
-
-    private async findNamesInRange(fileText: string, selection: Range, languageId: string) {
-        fileText.replace(/([\uE000-\uF8FF]|\uD83C[\uDF00-\uDFFF]|\uD83D[\uDC00-\uDDFF])/g, '')
-        const startLocation: Location = new Location(selection.start.line, selection.start.character)
-        const endLocation: Location = new Location(selection.end.line, selection.end.character)
-        const extent: Extent = new Extent(startLocation, endLocation)
-
-        let names: any = {}
-        switch (languageId) {
-            case 'java':
-                names = await Java.findNamesWithInExtent(fileText, extent)
-                break
-            case 'javascript':
-            case 'javascriptreact':
-            case 'typescriptreact':
-                names = await Tsx.findNamesWithInExtent(fileText, extent)
-                break
-            case 'python':
-                names = await Python.findNamesWithInExtent(fileText, extent)
-                break
-            case 'typescript':
-                names = await TypeScript.findNamesWithInExtent(fileText, extent)
-                break
-        }
-
-        return names
     }
 
     private prepareFqns(names: any): [FullyQualifiedName[], boolean] {

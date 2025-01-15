@@ -4,17 +4,25 @@
  */
 
 import * as vscode from 'vscode'
-import * as packageJson from '../../package.json'
 import * as codecatalyst from './clients/codecatalystClient'
 import * as codewhisperer from '../codewhisperer/client/codewhisperer'
-import { getLogger, showLogOutputChannel } from './logger'
-import { cast, FromDescriptor, Record, TypeConstructor, TypeDescriptor } from './utilities/typeConstructors'
+import { getLogger } from './logger'
+import {
+    cast,
+    FromDescriptor,
+    isNameMangled,
+    Record,
+    TypeConstructor,
+    TypeDescriptor,
+} from './utilities/typeConstructors'
 import { assertHasProps, ClassToInterfaceType, keys } from './utilities/tsUtils'
 import { toRecord } from './utilities/collectionUtils'
-import { isNameMangled } from './vscode/env'
 import { once, onceChanged } from './utilities/functionUtils'
 import { ToolkitError } from './errors'
 import { telemetry } from './telemetry/telemetry'
+import globals from './extensionGlobals'
+import toolkitSettings from './settings-toolkit.gen'
+import amazonQSettings from './settings-amazonq.gen'
 
 type Workspace = Pick<typeof vscode.workspace, 'getConfiguration' | 'onDidChangeConfiguration'>
 
@@ -29,9 +37,9 @@ export async function showSettingsFailedMsg(kind: 'read' | 'update', key?: strin
 
     const items = [openSettingsItem, logsItem]
     const p = vscode.window.showErrorMessage(msg, {}, ...items)
-    return p.then<string | undefined>(async selection => {
+    return p.then<string | undefined>(async (selection) => {
         if (selection === logsItem) {
-            showLogOutputChannel()
+            globals.logOutputChannel.show(true)
         } else if (selection === openSettingsItem) {
             await vscode.commands.executeCommand('workbench.action.openSettingsJson')
         }
@@ -42,7 +50,7 @@ export async function showSettingsFailedMsg(kind: 'read' | 'update', key?: strin
 /**
  * Shows an error message if we couldn't update settings, unless the last message was for the same `key`.
  */
-const showSettingsUpdateFailedMsgOnce = onceChanged(key => {
+const showSettingsUpdateFailedMsgOnce = onceChanged((key) => {
     // Edge cases:
     //  - settings.json may intentionally be readonly. #4043
     //  - settings.json may be open in multiple vscodes. #4453
@@ -167,6 +175,8 @@ export class Settings {
     /**
      * Returns a scoped "slice" (or "view") of the settings configuration.
      *
+     * TODO(jmkeyes): This lacks all the type checking and error handling of {@link Settings}.
+     *
      * The returned {@link Settings} interface is limited to the provided section.
      *
      * Example:
@@ -217,7 +227,7 @@ export class Settings {
     ): vscode.Disposable {
         const toRelative = (sub: string) => (section ? [section, sub] : [sub]).join('.')
 
-        return this.workspace.onDidChangeConfiguration(e => {
+        return this.workspace.onDidChangeConfiguration((e) => {
             const affectsConfiguration = (section: string) => e.affectsConfiguration(toRelative(section), this.scope)
 
             if (!section || e.affectsConfiguration(section, this.scope)) {
@@ -402,9 +412,9 @@ function createSettingsClass<T extends TypeDescriptor>(section: string, descript
             // value is a valid way to express that the key exists but no (valid) value is set.
 
             const props = keys(descriptor)
-            const store = toRecord(props, p => this._getOrUndefined(p))
+            const store = toRecord(props, (p) => this._getOrUndefined(p))
             const emitter = new vscode.EventEmitter<{ readonly key: keyof T }>()
-            const listener = this.#settings.onDidChangeSection(section, event => {
+            const listener = this.#settings.onDidChangeSection(section, (event) => {
                 const isDifferent = (p: keyof T & string) => {
                     const isDifferentLazy = () => {
                         const previous = store[p]
@@ -475,7 +485,7 @@ export interface ResetableMemento extends vscode.Memento {
 // from implementations. Using types requires basically no logic but lacks
 // precision. We still need to manually specify what type something should be,
 // at least for anything beyond primitive types.
-const settingsProps = packageJson.contributes.configuration.properties
+const settingsProps = { ...toolkitSettings, ...amazonQSettings }
 
 type SettingsProps = typeof settingsProps
 
@@ -495,12 +505,12 @@ type Config = Intersection<Format<SettingsProps>>
 type Join<T extends string[], S extends string> = T['length'] extends 1
     ? T[0]
     : T extends [infer L, ...infer R]
-    ? L extends string
-        ? R extends string[]
-            ? `${L}${S}${Join<R, S>}`
-            : ''
-        : ''
-    : never
+      ? L extends string
+          ? R extends string[]
+              ? `${L}${S}${Join<R, S>}`
+              : ''
+          : ''
+      : never
 
 type Select<T, K> = K extends [infer L, ...infer R]
     ? L extends keyof T
@@ -567,12 +577,14 @@ export function fromExtensionManifest<T extends TypeDescriptor & Partial<Section
     //
     // As long as the above holds true, throwing an error here will always be caught by CI
 
-    const resolved = keys(descriptor).map(k => `${section}.${k}`)
-    const missing = resolved.filter(k => (settingsProps as Record<string, any>)[k] === undefined)
+    const resolved = keys(descriptor).map((k) => `${section}.${k}`)
+    const missing = resolved.filter((k) => (settingsProps as Record<string, any>)[k] === undefined)
 
     if (missing.length > 0) {
         const message = `The following configuration keys were missing from package.json: ${missing.join(', ')}`
-        getLogger().error(`Settings (fromExtensionManifest): missing fields:\n${missing.map(k => `\t${k}`).join('\n')}`)
+        getLogger().error(
+            `Settings (fromExtensionManifest): missing fields:\n${missing.map((k) => `\t${k}`).join('\n')}`
+        )
 
         throw new Error(message)
     }
@@ -580,16 +592,15 @@ export function fromExtensionManifest<T extends TypeDescriptor & Partial<Section
     return Settings.define(section, descriptor)
 }
 
-const prompts = settingsProps['aws.suppressPrompts'].properties
-type PromptName = keyof typeof prompts
-
 /**
+ * PromptSettings
+ *
  * Controls flags for prompts that allow the user to hide them. Usually this is presented as
  * some variation of "Don't show again".
  *
  * ### Usage:
  * ```
- * if (await settings.isPromptEnabled('myPromptName')) {
+ * if (settings.isPromptEnabled('myPromptName')) {
  *     // Show some sort of prompt
  *     const userResponse = await promptUser()
  *
@@ -599,36 +610,93 @@ type PromptName = keyof typeof prompts
  *     }
  * }
  * ```
+ *
+ * There are individual implementations for the Toolkit extension and Amazon Q extension.
+ * This is a temporary workaround to get compile time checking and runtime fetching
+ * of settings working.
+ *
+ * TODO: Settings should be defined in individual extensions, and passed to the
+ * core lib as necessary.
  */
-export class PromptSettings extends Settings.define(
-    'aws.suppressPrompts',
-    toRecord(keys(prompts), () => Boolean)
-) {
-    public async isPromptEnabled(promptName: PromptName): Promise<boolean> {
+export const toolkitPrompts = settingsProps['aws.suppressPrompts']
+type toolkitPromptName = keyof typeof toolkitPrompts
+export class ToolkitPromptSettings
+    extends Settings.define(
+        'aws.suppressPrompts',
+        toRecord(keys(toolkitPrompts), () => Boolean)
+    )
+    implements PromptSettings
+{
+    public isPromptEnabled(promptName: toolkitPromptName): boolean {
         try {
             return !this._getOrThrow(promptName, false)
         } catch (e) {
             this._log('prompt check for "%s" failed: %s', promptName, (e as Error).message)
-            await this.reset()
+            this.reset().catch((e) => getLogger().error(`failed to reset prompt settings: %O`, (e as Error).message))
 
             return true
         }
     }
 
-    public async disablePrompt(promptName: PromptName): Promise<void> {
-        if (await this.isPromptEnabled(promptName)) {
+    public async disablePrompt(promptName: toolkitPromptName): Promise<void> {
+        if (this.isPromptEnabled(promptName)) {
             await this.update(promptName, true)
         }
     }
 
-    static #instance: PromptSettings
+    static #instance: ToolkitPromptSettings
 
     public static get instance() {
         return (this.#instance ??= new this())
     }
 }
 
-const experiments = settingsProps['aws.experiments'].properties
+export const amazonQPrompts = settingsProps['amazonQ.suppressPrompts']
+type amazonQPromptName = keyof typeof amazonQPrompts
+export class AmazonQPromptSettings
+    extends Settings.define(
+        'amazonQ.suppressPrompts',
+        toRecord(keys(amazonQPrompts), () => Boolean)
+    )
+    implements PromptSettings
+{
+    public isPromptEnabled(promptName: amazonQPromptName): boolean {
+        try {
+            return !this._getOrThrow(promptName, false)
+        } catch (e) {
+            this._log('prompt check for "%s" failed: %s', promptName, (e as Error).message)
+            this.reset().catch((e) => getLogger().error(`isPromptEnabled: reset() failed: %O`, (e as Error).message))
+
+            return true
+        }
+    }
+
+    public async disablePrompt(promptName: amazonQPromptName): Promise<void> {
+        if (this.isPromptEnabled(promptName)) {
+            await this.update(promptName, true)
+        }
+    }
+
+    static #instance: AmazonQPromptSettings
+
+    public static get instance() {
+        return (this.#instance ??= new this())
+    }
+}
+
+/**
+ * Use cautiously as this is misleading. Ideally we create a type
+ * which is the intersection of the types (only the values that occur
+ * in each are selected), but idk how to do that.
+ */
+type AllPromptNames = amazonQPromptName | toolkitPromptName
+
+export interface PromptSettings {
+    isPromptEnabled(promptName: AllPromptNames): boolean
+    disablePrompt(promptName: AllPromptNames): Promise<void>
+}
+
+const experiments = settingsProps['aws.experiments']
 type ExperimentName = keyof typeof experiments
 
 /**
@@ -658,12 +726,12 @@ export class Experiments extends Settings.define(
     'aws.experiments',
     toRecord(keys(experiments), () => Boolean)
 ) {
-    public async isExperimentEnabled(name: ExperimentName): Promise<boolean> {
+    public isExperimentEnabled(name: ExperimentName): boolean {
         try {
             return this._getOrThrow(name, false)
         } catch (error) {
             this._log(`experiment check for ${name} failed: %s`, error)
-            await this.reset()
+            this.reset().catch((e) => getLogger().error(`failed to reset experiment settings: %O`, e))
 
             return false
         }
@@ -677,17 +745,23 @@ export class Experiments extends Settings.define(
 }
 
 const devSettings = {
+    crashCheckInterval: Number,
     logfile: String,
     forceCloud9: Boolean,
     forceDevMode: Boolean,
     forceInstallTools: Boolean,
+    forceResolveEnv: Boolean,
     telemetryEndpoint: String,
     telemetryUserPool: String,
     renderDebugDetails: Boolean,
+    devenvTimeoutMs: Number,
     endpoints: Record(String, String),
     codecatalystService: Record(String, String),
     codewhispererService: Record(String, String),
     ssoCacheDirectory: String,
+    autofillStartUrl: String,
+    webAuth: Boolean,
+    notificationsPollInterval: Number,
 }
 type ResolvedDevSettings = FromDescriptor<typeof devSettings>
 type AwsDevSetting = keyof ResolvedDevSettings
@@ -820,34 +894,51 @@ export class DevSettings extends Settings.define('aws.dev', devSettings) {
  * Simple utility function to 'migrate' a setting from one key to another.
  *
  * Currently only used for simple migrations where we are not concerned about maintaining the
- * legacy definition. Only migrates to global settings.
+ * legacy definition.
  */
 export async function migrateSetting<T, U = T>(
     from: { key: string; type: TypeConstructor<T> },
-    to: { key: string; transform?: (value: T) => U }
+    to: { key: keyof SettingsProps; transform?: (value: T) => U }
 ) {
-    // TODO(sijaden): we should handle other targets besides 'global'
     const config = vscode.workspace.getConfiguration()
-    const hasLatest = config.inspect(to.key)?.globalValue !== undefined
-    const logPrefix = `Settings migration ("${from.key}" -> "${to.key}")`
 
-    if (hasLatest || !config.has(from.key)) {
-        return true
+    const migrateForScope = async (scope: vscode.ConfigurationTarget) => {
+        const valueProp = scope === vscode.ConfigurationTarget.Global ? 'globalValue' : 'workspaceValue'
+        const hasLatest = config.inspect(to.key)![valueProp] !== undefined
+        const logPrefix = `Settings migration ("${from.key}" -> "${to.key}"), (scope: ${valueProp})`
+
+        const oldSettingProps = config.inspect(from.key)
+        if (hasLatest) {
+            getLogger().debug(`skipping: ${logPrefix}, the latest setting is already defined for this scope.`)
+            return
+        }
+        if (!oldSettingProps) {
+            getLogger().debug(`skipping: ${logPrefix}, the old setting does not exist.`)
+            return
+        }
+        if (oldSettingProps[valueProp] === undefined) {
+            getLogger().debug(`skipping: ${logPrefix}, the old setting is not defined for this scope.`)
+            return
+        }
+
+        try {
+            const oldVal = cast(config.get(from.key), from.type)
+            const newVal = to.transform?.(oldVal) ?? oldVal
+
+            await config.update(to.key, newVal, scope)
+            getLogger().info(`${logPrefix}: succeeded`)
+        } catch (error) {
+            getLogger().verbose(`${logPrefix}: failed: %s`, error)
+        }
     }
 
-    try {
-        const oldVal = cast(config.get(from.key), from.type)
-        const newVal = to.transform?.(oldVal) ?? oldVal
+    await migrateForScope(vscode.ConfigurationTarget.Workspace)
+    await migrateForScope(vscode.ConfigurationTarget.Global)
+}
 
-        await config.update(to.key, newVal, vscode.ConfigurationTarget.Global)
-        getLogger().debug(`${logPrefix}: succeeded`)
-
-        return true
-    } catch (error) {
-        getLogger().verbose(`${logPrefix}: failed: %s`, error)
-
-        return false
-    }
+/** Opens the settings UI filtered by the given prefix. */
+export async function openSettings(prefix: string): Promise<void> {
+    await vscode.commands.executeCommand('workbench.action.openSettings', prefix)
 }
 
 /**
@@ -855,6 +946,6 @@ export async function migrateSetting<T, U = T>(
  *
  * This only works for keys that are considered "top-level", e.g. keys of {@link settingsProps}.
  */
-export async function openSettings<K extends keyof SettingsProps>(key: K): Promise<void> {
+export async function openSettingsId<K extends keyof SettingsProps>(key: K): Promise<void> {
     await vscode.commands.executeCommand('workbench.action.openSettings', `@id:${key}`)
 }

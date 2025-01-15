@@ -97,6 +97,54 @@ export interface GenerateAssistantResponseCommandOutput extends GenerateAssistan
  *                   },
  *                 },
  *               },
+ *               relevantDocuments: [ // RelevantDocumentList
+ *                 { // RelevantTextDocument
+ *                   relativeFilePath: "STRING_VALUE", // required
+ *                   programmingLanguage: {
+ *                     languageName: "STRING_VALUE", // required
+ *                   },
+ *                   text: "STRING_VALUE",
+ *                   documentSymbols: [
+ *                     {
+ *                       name: "STRING_VALUE", // required
+ *                       type: "DECLARATION" || "USAGE", // required
+ *                       source: "STRING_VALUE",
+ *                     },
+ *                   ],
+ *                 },
+ *               ],
+ *               useRelevantDocuments: true || false,
+ *             },
+ *             shellState: { // ShellState
+ *               shellName: "STRING_VALUE", // required
+ *               shellHistory: [ // ShellHistory
+ *                 { // ShellHistoryEntry
+ *                   command: "STRING_VALUE", // required
+ *                   directory: "STRING_VALUE",
+ *                   exitCode: Number("int"),
+ *                   stdout: "STRING_VALUE",
+ *                   stderr: "STRING_VALUE",
+ *                 },
+ *               ],
+ *             },
+ *             gitState: { // GitState
+ *               status: "STRING_VALUE",
+ *             },
+ *             envState: { // EnvState
+ *               operatingSystem: "STRING_VALUE",
+ *               currentWorkingDirectory: "STRING_VALUE",
+ *               environmentVariables: [ // EnvironmentVariables
+ *                 { // EnvironmentVariable
+ *                   key: "STRING_VALUE",
+ *                   value: "STRING_VALUE",
+ *                 },
+ *               ],
+ *             },
+ *             appStudioContext: { // AppStudioState
+ *               namespace: "STRING_VALUE", // required
+ *               propertyName: "STRING_VALUE", // required
+ *               propertyValue: "STRING_VALUE",
+ *               propertyContext: "STRING_VALUE", // required
  *             },
  *             diagnostic: { // Diagnostic Union: only one key present
  *               textDocumentDiagnostic: { // TextDocumentDiagnostic
@@ -134,8 +182,14 @@ export interface GenerateAssistantResponseCommandOutput extends GenerateAssistan
  *                 message: "STRING_VALUE", // required
  *               },
  *             },
+ *             consoleState: { // ConsoleState
+ *               region: "STRING_VALUE",
+ *             },
+ *             userSettings: { // UserSettings
+ *               hasConsentedToCrossRegionCalls: true || false,
+ *             },
  *           },
- *           userIntent: "SUGGEST_ALTERNATE_IMPLEMENTATION" || "APPLY_COMMON_BEST_PRACTICES" || "IMPROVE_CODE" || "SHOW_EXAMPLES" || "CITE_SOURCES" || "EXPLAIN_LINE_BY_LINE" || "EXPLAIN_CODE_SELECTION",
+ *           userIntent: "SUGGEST_ALTERNATE_IMPLEMENTATION" || "APPLY_COMMON_BEST_PRACTICES" || "IMPROVE_CODE" || "SHOW_EXAMPLES" || "CITE_SOURCES" || "EXPLAIN_LINE_BY_LINE" || "EXPLAIN_CODE_SELECTION" || "GENERATE_CLOUDFORMATION_TEMPLATE" || "GENERATE_UNIT_TESTS",
  *         },
  *         assistantResponseMessage: { // AssistantResponseMessage
  *           messageId: "STRING_VALUE",
@@ -160,7 +214,7 @@ export interface GenerateAssistantResponseCommandOutput extends GenerateAssistan
  *           ],
  *           followupPrompt: { // FollowupPrompt
  *             content: "STRING_VALUE", // required
- *             userIntent: "SUGGEST_ALTERNATE_IMPLEMENTATION" || "APPLY_COMMON_BEST_PRACTICES" || "IMPROVE_CODE" || "SHOW_EXAMPLES" || "CITE_SOURCES" || "EXPLAIN_LINE_BY_LINE" || "EXPLAIN_CODE_SELECTION",
+ *             userIntent: "SUGGEST_ALTERNATE_IMPLEMENTATION" || "APPLY_COMMON_BEST_PRACTICES" || "IMPROVE_CODE" || "SHOW_EXAMPLES" || "CITE_SOURCES" || "EXPLAIN_LINE_BY_LINE" || "EXPLAIN_CODE_SELECTION" || "GENERATE_CLOUDFORMATION_TEMPLATE" || "GENERATE_UNIT_TESTS",
  *           },
  *         },
  *       },
@@ -178,6 +232,54 @@ export interface GenerateAssistantResponseCommandOutput extends GenerateAssistan
  *                 end: "<Position>", // required
  *               },
  *             },
+ *             relevantDocuments: [
+ *               {
+ *                 relativeFilePath: "STRING_VALUE", // required
+ *                 programmingLanguage: {
+ *                   languageName: "STRING_VALUE", // required
+ *                 },
+ *                 text: "STRING_VALUE",
+ *                 documentSymbols: [
+ *                   {
+ *                     name: "STRING_VALUE", // required
+ *                     type: "DECLARATION" || "USAGE", // required
+ *                     source: "STRING_VALUE",
+ *                   },
+ *                 ],
+ *               },
+ *             ],
+ *             useRelevantDocuments: true || false,
+ *           },
+ *           shellState: {
+ *             shellName: "STRING_VALUE", // required
+ *             shellHistory: [
+ *               {
+ *                 command: "STRING_VALUE", // required
+ *                 directory: "STRING_VALUE",
+ *                 exitCode: Number("int"),
+ *                 stdout: "STRING_VALUE",
+ *                 stderr: "STRING_VALUE",
+ *               },
+ *             ],
+ *           },
+ *           gitState: {
+ *             status: "STRING_VALUE",
+ *           },
+ *           envState: {
+ *             operatingSystem: "STRING_VALUE",
+ *             currentWorkingDirectory: "STRING_VALUE",
+ *             environmentVariables: [
+ *               {
+ *                 key: "STRING_VALUE",
+ *                 value: "STRING_VALUE",
+ *               },
+ *             ],
+ *           },
+ *           appStudioContext: {
+ *             namespace: "STRING_VALUE", // required
+ *             propertyName: "STRING_VALUE", // required
+ *             propertyValue: "STRING_VALUE",
+ *             propertyContext: "STRING_VALUE", // required
  *           },
  *           diagnostic: {//  Union: only one key present
  *             textDocumentDiagnostic: {
@@ -196,8 +298,14 @@ export interface GenerateAssistantResponseCommandOutput extends GenerateAssistan
  *               message: "STRING_VALUE", // required
  *             },
  *           },
+ *           consoleState: {
+ *             region: "STRING_VALUE",
+ *           },
+ *           userSettings: {
+ *             hasConsentedToCrossRegionCalls: true || false,
+ *           },
  *         },
- *         userIntent: "SUGGEST_ALTERNATE_IMPLEMENTATION" || "APPLY_COMMON_BEST_PRACTICES" || "IMPROVE_CODE" || "SHOW_EXAMPLES" || "CITE_SOURCES" || "EXPLAIN_LINE_BY_LINE" || "EXPLAIN_CODE_SELECTION",
+ *         userIntent: "SUGGEST_ALTERNATE_IMPLEMENTATION" || "APPLY_COMMON_BEST_PRACTICES" || "IMPROVE_CODE" || "SHOW_EXAMPLES" || "CITE_SOURCES" || "EXPLAIN_LINE_BY_LINE" || "EXPLAIN_CODE_SELECTION" || "GENERATE_CLOUDFORMATION_TEMPLATE" || "GENERATE_UNIT_TESTS",
  *       },
  *       assistantResponseMessage: {
  *         messageId: "STRING_VALUE",
@@ -222,12 +330,14 @@ export interface GenerateAssistantResponseCommandOutput extends GenerateAssistan
  *         ],
  *         followupPrompt: {
  *           content: "STRING_VALUE", // required
- *           userIntent: "SUGGEST_ALTERNATE_IMPLEMENTATION" || "APPLY_COMMON_BEST_PRACTICES" || "IMPROVE_CODE" || "SHOW_EXAMPLES" || "CITE_SOURCES" || "EXPLAIN_LINE_BY_LINE" || "EXPLAIN_CODE_SELECTION",
+ *           userIntent: "SUGGEST_ALTERNATE_IMPLEMENTATION" || "APPLY_COMMON_BEST_PRACTICES" || "IMPROVE_CODE" || "SHOW_EXAMPLES" || "CITE_SOURCES" || "EXPLAIN_LINE_BY_LINE" || "EXPLAIN_CODE_SELECTION" || "GENERATE_CLOUDFORMATION_TEMPLATE" || "GENERATE_UNIT_TESTS",
  *         },
  *       },
  *     },
  *     chatTriggerType: "MANUAL" || "DIAGNOSTIC", // required
+ *     customizationArn: "STRING_VALUE",
  *   },
+ *   profileArn: "STRING_VALUE",
  * };
  * const command = new GenerateAssistantResponseCommand(input);
  * const response = await client.send(command);
@@ -265,7 +375,19 @@ export interface GenerateAssistantResponseCommandOutput extends GenerateAssistan
  * //     followupPromptEvent: { // FollowupPromptEvent
  * //       followupPrompt: { // FollowupPrompt
  * //         content: "STRING_VALUE", // required
- * //         userIntent: "SUGGEST_ALTERNATE_IMPLEMENTATION" || "APPLY_COMMON_BEST_PRACTICES" || "IMPROVE_CODE" || "SHOW_EXAMPLES" || "CITE_SOURCES" || "EXPLAIN_LINE_BY_LINE" || "EXPLAIN_CODE_SELECTION",
+ * //         userIntent: "SUGGEST_ALTERNATE_IMPLEMENTATION" || "APPLY_COMMON_BEST_PRACTICES" || "IMPROVE_CODE" || "SHOW_EXAMPLES" || "CITE_SOURCES" || "EXPLAIN_LINE_BY_LINE" || "EXPLAIN_CODE_SELECTION" || "GENERATE_CLOUDFORMATION_TEMPLATE" || "GENERATE_UNIT_TESTS",
+ * //       },
+ * //     },
+ * //     codeEvent: { // CodeEvent
+ * //       content: "STRING_VALUE", // required
+ * //     },
+ * //     intentsEvent: { // IntentsEvent
+ * //       intents: { // IntentMap
+ * //         "<keys>": { // IntentData
+ * //           "<keys>": { // IntentDataType Union: only one key present
+ * //             string: "STRING_VALUE",
+ * //           },
+ * //         },
  * //       },
  * //     },
  * //     invalidStateEvent: { // InvalidStateEvent

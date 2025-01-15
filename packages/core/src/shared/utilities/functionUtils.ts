@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import globals from '../extensionGlobals'
+import { sleep, Timeout } from './timeoutUtils'
 
 /**
  * Creates a function that always returns a 'shared' Promise.
@@ -87,21 +87,22 @@ export function memoize<T, U extends any[]>(fn: (...args: U) => T): (...args: U)
  * the execution by another {@link delay} milliseconds.
  */
 export function debounce<T>(cb: () => T | Promise<T>, delay: number = 0): () => Promise<T> {
-    let timer: NodeJS.Timeout | undefined
+    let timeout: Timeout | undefined
     let promise: Promise<T> | undefined
 
     return () => {
-        timer?.refresh()
+        timeout?.refresh()
 
         return (promise ??= new Promise<T>((resolve, reject) => {
-            timer = globals.clock.setTimeout(async () => {
-                timer = promise = undefined
+            timeout = new Timeout(delay)
+            timeout.onCompletion(async () => {
+                timeout = promise = undefined
                 try {
                     resolve(await cb())
                 } catch (err) {
                     reject(err)
                 }
-            }, delay)
+            })
         }))
     }
 }
@@ -114,32 +115,64 @@ export function cancellableDebounce<T, U extends any[]>(
     cb: (...args: U) => T | Promise<T>,
     delay: number = 0
 ): { promise: (...args: U) => Promise<T>; cancel: () => void } {
-    let timer: NodeJS.Timeout | undefined
+    let timeout: Timeout | undefined
     let promise: Promise<T> | undefined
 
     const cancel = (): void => {
-        if (timer) {
-            clearTimeout(timer)
-            timer = undefined
+        if (timeout) {
+            timeout.cancel()
+            timeout = undefined
             promise = undefined
         }
     }
 
     return {
         promise: (...arg) => {
-            timer?.refresh()
+            timeout?.refresh()
 
             return (promise ??= new Promise<T>((resolve, reject) => {
-                timer = globals.clock.setTimeout(async () => {
-                    timer = promise = undefined
+                timeout = new Timeout(delay)
+                timeout.onCompletion(async () => {
+                    timeout = promise = undefined
                     try {
                         resolve(await cb(...arg))
                     } catch (err) {
                         reject(err)
                     }
-                }, delay)
+                })
             }))
         },
         cancel: cancel,
+    }
+}
+
+/**
+ * Executes the given function, retrying if it throws.
+ *
+ * @param opts - if no opts given, defaults are used
+ */
+export async function withRetries<T>(
+    fn: () => Promise<T>,
+    opts?: { maxRetries?: number; delay?: number; backoff?: number }
+): Promise<T> {
+    const maxRetries = opts?.maxRetries ?? 3
+    const delay = opts?.delay ?? 0
+    const backoff = opts?.backoff ?? 1
+
+    let retryCount = 0
+    let latestDelay = delay
+    while (true) {
+        try {
+            return await fn()
+        } catch (err) {
+            retryCount++
+            if (retryCount >= maxRetries) {
+                throw err
+            }
+            if (latestDelay > 0) {
+                await sleep(latestDelay)
+                latestDelay = latestDelay * backoff
+            }
+        }
     }
 }

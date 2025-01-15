@@ -5,19 +5,26 @@
 import * as vscode from 'vscode'
 import { Credentials } from '@aws-sdk/types'
 import { Mutable } from '../shared/utilities/tsUtils'
-import { builderIdStartUrl, SsoToken, truncateStartUrl } from './sso/model'
+import { ClientRegistration, SsoToken, truncateStartUrl } from './sso/model'
 import { SsoClient } from './sso/clients'
 import { CredentialsProviderManager } from './providers/credentialsProviderManager'
 import { fromString } from './providers/credentials'
 import { getLogger } from '../shared/logger/logger'
 import { showMessageWithUrl } from '../shared/utilities/messages'
 import { onceChanged } from '../shared/utilities/functionUtils'
+import { AuthAddConnection, AwsLoginWithBrowser } from '../shared/telemetry/telemetry.gen'
+import { withTelemetryContext } from '../shared/telemetry/util'
+import { AuthModifyConnection, telemetry } from '../shared/telemetry/telemetry'
+import { asStringifiedStack } from '../shared/telemetry/spans'
+import { getTelemetryReason, getTelemetryReasonDesc } from '../shared/errors'
+import { builderIdStartUrl } from './sso/constants'
 
-/** Shows an error message unless it is the same as the last one shown. */
+/** Shows a warning message unless it is the same as the last one shown. */
 const warnOnce = onceChanged((s: string, url: string) => {
-    void showMessageWithUrl(s, url, undefined, 'error')
+    void showMessageWithUrl(s, url, undefined, 'warn')
 })
 
+// TODO: Refactor all scopes to a central file with minimal dependencies.
 export const scopesCodeCatalyst = ['codecatalyst:read_write']
 export const scopesSsoAccountAccess = ['sso:account:access']
 /** These are the non-chat scopes for CW. */
@@ -32,6 +39,11 @@ type SsoType =
     | 'any' // any type of sso
     | 'idc' // AWS Identity Center
     | 'builderId'
+
+// TODO: This type is not centralized and there are many routines in the codebase that use some
+// variation for these for validation, telemetry, UX, etc. A refactor is needed to align these
+// string types.
+export type AuthType = 'credentials' | 'builderId' | 'identityCenter' | 'unknown'
 
 export const isIamConnection = (conn?: Connection): conn is IamConnection => conn?.type === 'iam'
 export const isSsoConnection = (conn?: Connection, type: SsoType = 'any'): conn is SsoConnection => {
@@ -59,8 +71,17 @@ export const isBuilderIdConnection = (conn?: Connection): conn is SsoConnection 
 export const isValidCodeCatalystConnection = (conn?: Connection): conn is SsoConnection =>
     isSsoConnection(conn) && hasScopes(conn, scopesCodeCatalyst)
 
-export function hasScopes(target: SsoConnection | SsoProfile, scopes: string[]): boolean {
-    return scopes?.every(s => target.scopes?.includes(s))
+export function hasScopes(target: SsoConnection | SsoProfile | string[], scopes: string[]): boolean {
+    return scopes?.every((s) => (Array.isArray(target) ? target : target.scopes)?.includes(s))
+}
+
+/**
+ * Stricter version of hasScopes that checks for all and only all of the predicate scopes.
+ * Not optimized, but the set of possible scopes is currently very small (< 8)
+ */
+export function hasExactScopes(target: SsoConnection | SsoProfile | string[], scopes: string[]): boolean {
+    const targetScopes = Array.isArray(target) ? target : (target.scopes ?? [])
+    return scopes.length === targetScopes.length && scopes.every((s) => targetScopes.includes(s))
 }
 
 export function createBuilderIdProfile(
@@ -98,6 +119,8 @@ export interface SsoConnection extends SsoProfile {
      * handle cases where the service rejects the token.
      */
     getToken(): Promise<Pick<SsoToken, 'accessToken' | 'expiresAt'>>
+
+    getRegistration(): Promise<ClientRegistration | undefined>
 }
 
 export interface IamConnection {
@@ -169,6 +192,11 @@ export interface ProfileMetadata {
      * * `invalid` -> `invalid` -> immediately throw to stop the user from being spammed
      */
     readonly connectionState: 'valid' | 'invalid' | 'unauthenticated' | 'authenticating'
+
+    /**
+     * Source of this connection profile where it was first created.
+     */
+    readonly source?: 'amazonq' | 'toolkit'
 }
 
 // Difference between "Connection" vs. "Profile":
@@ -180,17 +208,80 @@ export interface ProfileMetadata {
 
 export type StoredProfile<T extends Profile = Profile> = T & { readonly metadata: ProfileMetadata }
 
+export class ProfileNotFoundError extends Error {
+    public constructor(id: string) {
+        super(`Profile does not exist: ${id}`)
+    }
+}
+
+function getTelemetryForProfile(profile: StoredProfile<Profile> | undefined) {
+    if (!profile) {
+        return {}
+    }
+
+    let metadata: Partial<AuthModifyConnection> = {
+        connectionState: profile?.metadata.connectionState ?? 'undefined',
+    }
+
+    if (profile.type === 'sso') {
+        metadata = {
+            ...metadata,
+            authScopes: profile.scopes?.join(','),
+            credentialStartUrl: profile.startUrl,
+            awsRegion: profile.ssoRegion,
+        }
+    }
+
+    return metadata
+}
+
+const profileStoreClassName = 'ProfileStore'
 export class ProfileStore {
+    // To de-dupe telemetry
+    private _prevGetProfile: { id: string; connectionState: ProfileMetadata['connectionState'] } | undefined
+
     public constructor(private readonly memento: vscode.Memento) {}
 
     public getProfile(id: string): StoredProfile | undefined {
         return this.getData()[id]
     }
 
+    @withTelemetryContext({ name: 'getProfileOrThrow', class: profileStoreClassName })
     public getProfileOrThrow(id: string): StoredProfile {
-        const profile = this.getProfile(id)
-        if (profile === undefined) {
-            throw new Error(`Profile does not exist: ${id}`)
+        const metadata: AuthModifyConnection = {
+            action: 'getProfile',
+            id,
+            source: asStringifiedStack(telemetry.getFunctionStack()),
+        }
+
+        let profile: StoredProfile<Profile> | undefined
+        try {
+            profile = this.getProfile(id)
+            if (profile === undefined) {
+                throw new ProfileNotFoundError(id)
+            }
+        } catch (err) {
+            // Always emit failures
+            telemetry.auth_modifyConnection.emit({
+                ...metadata,
+                result: 'Failed',
+                reason: getTelemetryReason(err),
+                reasonDesc: getTelemetryReasonDesc(err),
+            })
+            throw err
+        }
+
+        // De-dupe metric on last id and connection state
+        if (
+            this._prevGetProfile?.id !== id ||
+            this._prevGetProfile?.connectionState !== profile.metadata.connectionState
+        ) {
+            telemetry.auth_modifyConnection.emit({
+                ...metadata,
+                ...getTelemetryForProfile(profile),
+                result: 'Succeeded',
+            })
+            this._prevGetProfile = { id, connectionState: profile.metadata.connectionState }
         }
 
         return profile
@@ -202,17 +293,40 @@ export class ProfileStore {
 
     public async addProfile(id: string, profile: SsoProfile): Promise<StoredProfile<SsoProfile>>
     public async addProfile(id: string, profile: IamProfile): Promise<StoredProfile<IamProfile>>
+    @withTelemetryContext({ name: 'addProfile', class: profileStoreClassName })
     public async addProfile(id: string, profile: Profile): Promise<StoredProfile> {
-        return this.putProfile(id, this.initMetadata(profile))
+        return telemetry.auth_modifyConnection.run(async (span) => {
+            span.record({
+                action: 'addProfile',
+                id,
+                source: asStringifiedStack(telemetry.getFunctionStack()),
+            })
+
+            const newProfile = this.initMetadata(profile)
+            span.record(getTelemetryForProfile(newProfile))
+
+            return await this.putProfile(id, newProfile)
+        })
     }
 
+    @withTelemetryContext({ name: 'updateProfile', class: profileStoreClassName })
     public async updateProfile(id: string, profile: Profile): Promise<StoredProfile> {
-        const oldProfile = this.getProfileOrThrow(id)
-        if (oldProfile.type !== profile.type) {
-            throw new Error(`Cannot change profile type from "${oldProfile.type}" to "${profile.type}"`)
-        }
+        return telemetry.auth_modifyConnection.run(async (span) => {
+            span.record({
+                action: 'updateProfile',
+                id,
+                source: asStringifiedStack(telemetry.getFunctionStack()),
+            })
 
-        return this.putProfile(id, { ...oldProfile, ...profile })
+            const oldProfile = this.getProfileOrThrow(id)
+            if (oldProfile.type !== profile.type) {
+                throw new Error(`Cannot change profile type from "${oldProfile.type}" to "${profile.type}"`)
+            }
+
+            const newProfile = await this.putProfile(id, { ...oldProfile, ...profile })
+            span.record(getTelemetryForProfile(newProfile))
+            return newProfile
+        })
     }
 
     public async updateMetadata(id: string, metadata: ProfileMetadata): Promise<StoredProfile> {
@@ -221,11 +335,21 @@ export class ProfileStore {
         return this.putProfile(id, { ...profile, metadata: { ...profile.metadata, ...metadata } })
     }
 
+    @withTelemetryContext({ name: 'deleteProfile', class: profileStoreClassName })
     public async deleteProfile(id: string): Promise<void> {
-        const data = this.getData()
-        delete (data as Mutable<typeof data>)[id]
+        return telemetry.auth_modifyConnection.run(async (span) => {
+            span.record({
+                action: 'deleteProfile',
+                id,
+                source: asStringifiedStack(telemetry.getFunctionStack()),
+            })
 
-        await this.updateData(data)
+            const data = this.getData()
+            span.record(getTelemetryForProfile(data[id]))
+            delete (data as Mutable<typeof data>)[id]
+
+            await this.updateData(data)
+        })
     }
 
     public getCurrentProfileId(): string | undefined {
@@ -300,12 +424,12 @@ export async function* loadLinkedProfilesIntoStore(
 
     const stream = client
         .listAccounts()
-        .catch(e => {
+        .catch((e) => {
             getLogger().error('listAccounts() failed: %s', (e as Error).message)
             return []
         })
         .flatten()
-        .map(resp => {
+        .map((resp) => {
             accounts.add(resp.accountId)
             return client.listAccountRoles({ accountId: resp.accountId }).flatten()
         })
@@ -333,7 +457,7 @@ export async function* loadLinkedProfilesIntoStore(
     }
 
     /** Does `ssoProfile` have scopes other than "sso:account:access"? */
-    const hasScopes = !!ssoProfile.scopes?.some(s => !scopesSsoAccountAccess.includes(s))
+    const hasScopes = !!ssoProfile.scopes?.some((s) => !scopesSsoAccountAccess.includes(s))
     if (!hasScopes && (accounts.size === 0 || found.size === 0)) {
         // SSO user has no OIDC scopes nor IAM roles. Possible causes:
         // - user is not an "Assigned user" in any account in the SSO org
@@ -366,3 +490,42 @@ export async function* loadLinkedProfilesIntoStore(
 // The true connection state can only be known after trying to use the connection
 // So it is not exposed on the `Connection` interface
 export type StatefulConnection = Connection & { readonly state: ProfileMetadata['connectionState'] }
+
+export interface AwsConnection {
+    readonly id: string
+    readonly label: string
+    readonly type: string
+    readonly ssoRegion: string
+    readonly startUrl: string
+    readonly scopes?: string[]
+    readonly state: ProfileMetadata['connectionState']
+}
+
+type Writeable<T> = { -readonly [U in keyof T]: T[U] }
+export type TelemetryMetadata = Partial<Writeable<AuthAddConnection & AwsLoginWithBrowser & AuthModifyConnection>>
+
+export async function getTelemetryMetadataForConn(conn?: Connection): Promise<TelemetryMetadata> {
+    if (conn === undefined) {
+        return {
+            id: 'undefined',
+        }
+    }
+
+    if (isSsoConnection(conn)) {
+        const registration = await conn.getRegistration()
+        return {
+            authScopes: conn.scopes?.join(','),
+            credentialSourceId: isBuilderIdConnection(conn) ? 'awsId' : 'iamIdentityCenter',
+            credentialStartUrl: conn?.startUrl,
+            awsRegion: conn?.ssoRegion,
+            ssoRegistrationExpiresAt: registration?.expiresAt.toISOString(),
+            ssoRegistrationClientId: registration?.clientId,
+        }
+    } else if (isIamConnection(conn)) {
+        return {
+            credentialSourceId: 'sharedCredentials',
+        }
+    }
+
+    throw new Error('getTelemetryMetadataForConn() called with unknown connection type')
+}

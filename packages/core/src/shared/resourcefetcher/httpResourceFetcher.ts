@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as fs from 'fs'
+import * as fs from 'fs' // eslint-disable-line no-restricted-imports
 import * as http from 'http'
 import * as https from 'https'
 import * as stream from 'stream'
@@ -138,7 +138,7 @@ export class HttpResourceFetcher implements ResourceFetcher {
     }
 
     private logText(): string {
-        return this.params.showUrl ? this.url : this.params.friendlyName ?? 'resource from URL'
+        return this.params.showUrl ? this.url : (this.params.friendlyName ?? 'resource from URL')
     }
 
     private logCancellation(event: CancelEvent) {
@@ -152,14 +152,14 @@ export class HttpResourceFetcher implements ResourceFetcher {
         const fsStream = fs.createWriteStream(pipeLocation)
 
         const done = new Promise<void>((resolve, reject) => {
-            const pipe = stream.pipeline(requestStream, fsStream, err => {
+            const pipe = stream.pipeline(requestStream, fsStream, (err) => {
                 if (err instanceof RequestError) {
                     return reject(Object.assign(new Error('Failed to download file'), { code: err.code }))
                 }
                 err ? reject(err) : resolve()
             })
 
-            const cancelListener = timeout?.token.onCancellationRequested(event => {
+            const cancelListener = timeout?.token.onCancellationRequested((event) => {
                 this.logCancellation(event)
                 pipe.destroy(new CancellationError(event.agent))
             })
@@ -176,14 +176,12 @@ export class HttpResourceFetcher implements ResourceFetcher {
             headers: this.buildRequestHeaders(headers),
         })
 
-        const cancelListener = timeout?.token.onCancellationRequested(event => {
+        const cancelListener = timeout?.token.onCancellationRequested((event) => {
             this.logCancellation(event)
             promise.cancel(new CancellationError(event.agent).message)
         })
 
-        promise.finally(() => cancelListener?.dispose())
-
-        return promise
+        return promise.finally(() => cancelListener?.dispose())
     }
 
     private buildRequestHeaders(requestHeaders?: RequestHeaders): Headers {

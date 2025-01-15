@@ -27,7 +27,7 @@ describe('RegistryItemNode', function () {
 
     it('puts documents into right registry', async function () {
         return Promise.all(
-            registryNames.map(async registry => {
+            registryNames.map(async (registry) => {
                 let owner: string
                 if (registry === 'Owned by Amazon') {
                     owner = 'Amazon'
@@ -53,9 +53,9 @@ describe('RegistryItemNode', function () {
                 const expectedNodeNames = [`${owner}doc`]
 
                 assert.strictEqual(childNode.length, expectedNodeNames.length)
-                childNode.forEach((node, index) => {
+                for (const [index, node] of childNode.entries()) {
                     assert.strictEqual(node.label, expectedNodeNames[index])
-                })
+                }
             })
         )
     })

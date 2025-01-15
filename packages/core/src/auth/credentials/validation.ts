@@ -36,12 +36,12 @@ export function getCredentialsErrors(
     validateFunc: GetCredentialError = getCredentialError
 ): CredentialsErrors | undefined {
     const errors: CredentialsData = {}
-    Object.entries(data).forEach(([key, value]) => {
+    for (const [key, value] of Object.entries(data)) {
         if (!isCredentialsKey(key)) {
-            return
+            continue
         }
         errors[key] = validateFunc(key, value)
-    })
+    }
 
     const hasErrors = Object.values(errors).some(Boolean)
     if (!hasErrors) {
@@ -114,7 +114,7 @@ export async function throwOnInvalidCredentials(profileName: SectionName, data: 
 
     const credentialsDataErrors = getCredentialsErrors(data)
     if (credentialsDataErrors !== undefined) {
-        throw new ToolkitError(`Errors in credentials data: ${credentialsDataErrors}`, {
+        throw new ToolkitError(`Errors in credentials data: ${String(credentialsDataErrors)}`, {
             code: 'InvalidCredentialsData',
             details: credentialsDataErrors,
         })

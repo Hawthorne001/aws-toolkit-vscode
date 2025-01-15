@@ -7,9 +7,9 @@ import * as vscode from 'vscode'
 import { SearchParams, UriHandler } from '../shared/vscode/uriHandler'
 import { getCodeCatalystConfig } from '../shared/clients/codecatalystClient'
 import { CodeCatalystCommands } from './commands'
-import { builderIdStartUrl } from '../auth/sso/model'
 import { defaultSsoRegion } from '../auth/connection'
 import { getLogger } from '../shared/logger'
+import { builderIdStartUrl } from '../auth/sso/constants'
 
 type ConnectParams = {
     devEnvironmentId: string
@@ -27,7 +27,7 @@ export function register(
 ) {
     async function cloneHandler(params: ReturnType<typeof parseCloneParams>) {
         if (params.url.authority.endsWith(getCodeCatalystConfig().gitHostname)) {
-            await commands.cloneRepo.execute(params.url)
+            await commands.cloneRepo.execute(undefined, params.url)
         } else {
             await vscode.commands.executeCommand('git.clone', params.url.toString())
         }
@@ -35,6 +35,7 @@ export function register(
 
     async function connectHandler(params: ConnectParams) {
         await commands.openDevEnv.execute(
+            undefined,
             {
                 id: params.devEnvironmentId,
                 org: { name: params.spaceName },
@@ -53,7 +54,7 @@ export function register(
 }
 
 function parseCloneParams(query: SearchParams) {
-    return { url: query.getAsOrThrow('url', 'A URL must be provided', v => vscode.Uri.parse(v, true)) }
+    return { url: query.getAsOrThrow('url', 'A URL must be provided', (v) => vscode.Uri.parse(v, true)) }
 }
 
 export function parseConnectParams(query: SearchParams): ConnectParams {

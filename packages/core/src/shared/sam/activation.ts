@@ -10,13 +10,7 @@ import globals from '../extensionGlobals'
 
 import * as vscode from 'vscode'
 import { createNewSamApplication, resumeCreateNewSamApp } from '../../lambda/commands/createNewSamApp'
-import { deploySamApplication } from '../../lambda/commands/deploySamApplication'
 import { SamParameterCompletionItemProvider } from '../../lambda/config/samParameterCompletionItemProvider'
-import {
-    DefaultSamDeployWizardContext,
-    SamDeployWizard,
-    SamDeployWizardResponse,
-} from '../../lambda/wizards/samDeployWizard'
 import * as codelensUtils from '../codelens/codeLensUtils'
 import * as csLensProvider from '../codelens/csharpCodeLensProvider'
 import * as javaLensProvider from '../codelens/javaCodeLensProvider'
@@ -25,8 +19,9 @@ import * as goLensProvider from '../codelens/goCodeLensProvider'
 import { SamTemplateCodeLensProvider } from '../codelens/samTemplateCodeLensProvider'
 import * as jsLensProvider from '../codelens/typescriptCodeLensProvider'
 import { ExtContext, VSCODE_EXTENSION_ID } from '../extensions'
-import { getIdeProperties, getIdeType, IDE, isCloud9 } from '../extensionUtilities'
-import { PerfLog, getLogger } from '../logger/logger'
+import { getIdeProperties, getIdeType, isCloud9 } from '../extensionUtilities'
+import { getLogger } from '../logger/logger'
+import { PerfLog } from '../logger/perfLogger'
 import { NoopWatcher } from '../fs/watchedFiles'
 import { detectSamCli } from './cli/samCliDetection'
 import { CodelensRootRegistry } from '../fs/codelensRootRegistry'
@@ -34,12 +29,14 @@ import { AWS_SAM_DEBUG_TYPE } from './debugger/awsSamDebugConfiguration'
 import { SamDebugConfigProvider } from './debugger/awsSamDebugger'
 import { addSamDebugConfiguration } from './debugger/commands/addSamDebugConfiguration'
 import { lazyLoadSamTemplateStrings } from '../../lambda/models/samTemplates'
-import { PromptSettings } from '../settings'
+import { ToolkitPromptSettings } from '../settings'
 import { shared } from '../utilities/functionUtils'
 import { SamCliSettings } from './cli/samCliSettings'
 import { Commands } from '../vscode/commands2'
-import { registerSync } from './sync'
+import { runSync } from './sync'
 import { showExtensionPage } from '../utilities/vsCodeUtils'
+import { runDeploy } from './deploy'
+import { telemetry } from '../telemetry/telemetry'
 
 const sharedDetectSamCli = shared(detectSamCli)
 
@@ -93,7 +90,7 @@ export async function activate(ctx: ExtContext): Promise<void> {
         )
     )
 
-    config.onDidChange(async event => {
+    config.onDidChange(async (event) => {
         switch (event.key) {
             case 'location':
                 // This only shows a message (passive=true), does not set anything.
@@ -109,13 +106,22 @@ export async function activate(ctx: ExtContext): Promise<void> {
         }
     })
 
+    const settings = SamCliSettings.instance
+    settings.onDidChange(({ key }) => {
+        if (key === 'legacyDeploy') {
+            telemetry.aws_modifySetting.run((span) => {
+                span.record({ settingId: 'sam_legacyDeploy' })
+                const state = settings.get('legacyDeploy')
+                span.record({ settingState: state ? 'Enabled' : 'Disabled' })
+            })
+        }
+    })
+
     ctx.extensionContext.subscriptions.push(config)
 
     if (globals.didReload) {
         await resumeCreateNewSamApp(ctx)
     }
-
-    registerSync()
 }
 
 async function registerCommands(ctx: ExtContext, settings: SamCliSettings): Promise<void> {
@@ -132,32 +138,27 @@ async function registerCommands(ctx: ExtContext, settings: SamCliSettings): Prom
             { id: 'aws.pickAddSamDebugConfiguration', autoconnect: false },
             codelensUtils.pickAddSamDebugConfiguration
         ),
-        Commands.register({ id: 'aws.deploySamApplication', autoconnect: true }, async arg => {
-            // `arg` is one of :
-            //  - undefined
-            //  - regionNode (selected from AWS Explorer)
-            //  -  Uri to template.yaml (selected from File Explorer)
-
-            const samDeployWizardContext = new DefaultSamDeployWizardContext(ctx)
-            const samDeployWizard = async (): Promise<SamDeployWizardResponse | undefined> => {
-                const wizard = new SamDeployWizard(samDeployWizardContext, arg)
-                return wizard.run()
-            }
-
-            await deploySamApplication(
-                {
-                    samDeployWizard: samDeployWizard,
-                },
-                {
-                    awsContext: ctx.awsContext,
-                    settings,
-                }
-            )
-        }),
+        Commands.register(
+            { id: 'aws.deploySamApplication', autoconnect: true },
+            async (arg) =>
+                // `arg` is one of :
+                //  - undefined
+                //  - regionNode (selected from AWS Explorer)
+                //  - Uri to template.yaml (selected from File Explorer)
+                //  - TreeNode (selected from AppBuilder)
+                await runDeploy(arg)
+        ),
         Commands.register({ id: 'aws.toggleSamCodeLenses', autoconnect: false }, async () => {
             const toggled = !settings.get('enableCodeLenses', false)
             await settings.update('enableCodeLenses', toggled)
-        })
+        }),
+        Commands.register(
+            {
+                id: 'aws.samcli.sync',
+                autoconnect: true,
+            },
+            async (arg?, validate?: boolean) => await runSync('infra', arg, validate)
+        )
     )
 }
 
@@ -180,14 +181,14 @@ async function activateCodeLensRegistry(context: ExtContext) {
         ])
         await registry.rebuild()
     } catch (e) {
-        await vscode.window.showErrorMessage(
+        void vscode.window.showErrorMessage(
             localize(
                 'AWS.codelens.failToInitializeCode',
                 'Failed to activate Lambda handler {0}',
                 getIdeProperties().codelenses
             )
         )
-        getLogger().error('Failed to activate codelens registry', e)
+        getLogger().error('Failed to activate codelens registry %O', e)
         // This prevents us from breaking for any reason later if it fails to load. Since
         // Noop watcher is always empty, we will get back empty arrays with no issues.
         globals.codelensRootRegistry = new NoopWatcher() as unknown as CodelensRootRegistry
@@ -199,7 +200,7 @@ async function samDebugConfigCmd() {
     const activeEditor = vscode.window.activeTextEditor
     if (!activeEditor) {
         getLogger().error(`aws.addSamDebugConfig was called without an active text editor`)
-        await vscode.window.showErrorMessage(
+        void vscode.window.showErrorMessage(
             localize('AWS.pickDebugHandler.noEditor', 'Toolkit could not find an active editor')
         )
 
@@ -209,7 +210,7 @@ async function samDebugConfigCmd() {
     const provider = supportedLanguages[document.languageId]
     if (!provider) {
         getLogger().error(`aws.addSamDebugConfig called on a document with an invalid language: ${document.languageId}`)
-        await vscode.window.showErrorMessage(
+        void vscode.window.showErrorMessage(
             localize(
                 'AWS.pickDebugHandler.invalidLanguage',
                 'Toolkit cannot detect handlers in language: {0}',
@@ -250,7 +251,7 @@ function activateSamYamlOverlays(): vscode.Disposable {
  *
  * Used for:
  * 1. showing codelenses
- * 2. "Add SAM Debug Configuration" command (TODO: remove dependency on
+ * 2. "Add Local Invoke and Debug Configuration" command (TODO: remove dependency on
  *    codelense provider (which scans the whole workspace and creates
  *    filewatchers)).
  */
@@ -297,7 +298,7 @@ async function activateCodefileOverlays(
  * Will not show if the YAML extension is installed or if a user has permanently dismissed the message.
  */
 async function createYamlExtensionPrompt(): Promise<void> {
-    const settings = PromptSettings.instance
+    const settings = ToolkitPromptSettings.instance
 
     /**
      * Prompt the user to install the YAML plugin when AWSTemplateFormatVersion becomes available as a top level key
@@ -322,8 +323,8 @@ async function createYamlExtensionPrompt(): Promise<void> {
     // Show this only in VSCode since other VSCode-like IDEs (e.g. Theia) may
     // not have a marketplace or contain the YAML plugin.
     if (
-        (await settings.isPromptEnabled('yamlExtPrompt')) &&
-        getIdeType() === IDE.vscode &&
+        settings.isPromptEnabled('yamlExtPrompt') &&
+        getIdeType() === 'vscode' &&
         !vscode.extensions.getExtension(VSCODE_EXTENSION_ID.yaml)
     ) {
         // Disposed immediately after showing one, so the user isn't prompted
@@ -375,7 +376,7 @@ async function createYamlExtensionPrompt(): Promise<void> {
 
         // user already has an open template with focus
         // prescreen if a template.yaml is current open so we only call once
-        const openTemplateYamls = vscode.window.visibleTextEditors.filter(editor => {
+        const openTemplateYamls = vscode.window.visibleTextEditors.filter((editor) => {
             const fileName = editor.document.fileName
             return fileName.endsWith('template.yaml') || fileName.endsWith('template.yml')
         })
@@ -415,7 +416,7 @@ async function promptInstallYamlPlugin(disposables: vscode.Disposable[]) {
     for (const prompt of disposables) {
         prompt.dispose()
     }
-    const settings = PromptSettings.instance
+    const settings = ToolkitPromptSettings.instance
 
     const installBtn = localize('AWS.missingExtension.install', 'Install...')
     const permanentlySuppress = localize('AWS.message.info.yaml.suppressPrompt', "Don't show again")

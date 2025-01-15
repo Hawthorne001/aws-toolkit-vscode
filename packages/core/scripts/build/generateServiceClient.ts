@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as child_process from 'child_process'
-import * as fs from 'fs-extra'
+import * as proc from 'child_process' // eslint-disable-line no-restricted-imports
+import * as nodefs from 'fs' // eslint-disable-line no-restricted-imports
 import * as path from 'path'
 
 const repoRoot = path.join(process.cwd(), '../../') // root/packages/toolkit -> root/
@@ -21,7 +21,7 @@ interface ServiceClientDefinition {
 async function generateServiceClients(serviceClientDefinitions: ServiceClientDefinition[]): Promise<void> {
     const tempJsSdkPath = path.join(repoRoot, 'node_modules', '.zzz-awssdk2')
     console.log(`Temp JS SDK Repo location: ${tempJsSdkPath}`)
-    console.log('Service Clients to Generate: ', serviceClientDefinitions.map(x => x.serviceName).join(', '))
+    console.log('Service Clients to Generate: ', serviceClientDefinitions.map((x) => x.serviceName).join(', '))
 
     await cloneJsSdk(tempJsSdkPath)
     await insertServiceClientsIntoJsSdk(tempJsSdkPath, serviceClientDefinitions)
@@ -33,7 +33,7 @@ async function generateServiceClients(serviceClientDefinitions: ServiceClientDef
 
 /** When cloning aws-sdk-js, we want to pull the version actually used in package-lock.json. */
 function getJsSdkVersion(): string {
-    const json = fs.readFileSync(path.resolve(repoRoot, 'package-lock.json')).toString()
+    const json = nodefs.readFileSync(path.resolve(repoRoot, 'package-lock.json')).toString()
     const packageLock = JSON.parse(json)
 
     return packageLock['packages']['node_modules/aws-sdk']['version']
@@ -48,7 +48,7 @@ async function cloneJsSdk(dir: string): Promise<void> {
         }
         const tag = `v${sdkversion}`
 
-        const gitHead = child_process.spawnSync('git', ['-C', dir, 'rev-parse', 'HEAD'])
+        const gitHead = proc.spawnSync('git', ['-C', dir, 'rev-parse', 'HEAD'])
 
         const alreadyCloned = gitHead.status !== undefined && gitHead.status === 0
         const msg = `${alreadyCloned ? 'Updating' : 'Cloning'} AWS JS SDK...
@@ -75,7 +75,7 @@ async function cloneJsSdk(dir: string): Promise<void> {
                   dir,
               ]
 
-        const gitCmd = child_process.execFile('git', gitArgs, { encoding: 'utf8' })
+        const gitCmd = proc.execFile('git', gitArgs, { encoding: 'utf8' })
 
         gitCmd.stderr?.on('data', (data: any) => {
             console.log(data)
@@ -84,7 +84,7 @@ async function cloneJsSdk(dir: string): Promise<void> {
             gitCmd.stdout?.removeAllListeners()
 
             // Only needed for the "update" case, but harmless for "clone".
-            const gitCheckout = child_process.spawnSync('git', [
+            const gitCheckout = proc.spawnSync('git', [
                 '-c',
                 'advice.detachedHead=false',
                 '-C',
@@ -106,7 +106,7 @@ async function insertServiceClientsIntoJsSdk(
     jsSdkPath: string,
     serviceClientDefinitions: ServiceClientDefinition[]
 ): Promise<void> {
-    serviceClientDefinitions.forEach(serviceClientDefinition => {
+    for (const serviceClientDefinition of serviceClientDefinitions) {
         const apiVersion = getApiVersion(serviceClientDefinition.serviceJsonPath)
 
         // Copy the Service Json into the JS SDK for generation
@@ -115,13 +115,13 @@ async function insertServiceClientsIntoJsSdk(
             'apis',
             `${serviceClientDefinition.serviceName.toLowerCase()}-${apiVersion}.normal.json`
         )
-        fs.copyFileSync(serviceClientDefinition.serviceJsonPath, jsSdkServiceJsonPath)
-    })
+        nodefs.copyFileSync(serviceClientDefinition.serviceJsonPath, jsSdkServiceJsonPath)
+    }
 
     const apiMetadataPath = path.join(jsSdkPath, 'apis', 'metadata.json')
     await patchServicesIntoApiMetadata(
         apiMetadataPath,
-        serviceClientDefinitions.map(x => x.serviceName)
+        serviceClientDefinitions.map((x) => x.serviceName)
     )
 }
 
@@ -132,7 +132,7 @@ interface ServiceJsonSchema {
 }
 
 function getApiVersion(serviceJsonPath: string): string {
-    const json = fs.readFileSync(serviceJsonPath).toString()
+    const json = nodefs.readFileSync(serviceJsonPath).toString()
     const serviceJson = JSON.parse(json) as ServiceJsonSchema
 
     return serviceJson.metadata.apiVersion
@@ -148,14 +148,14 @@ interface ApiMetadata {
 async function patchServicesIntoApiMetadata(apiMetadataPath: string, serviceNames: string[]): Promise<void> {
     console.log(`Patching services (${serviceNames.join(', ')}) into API Metadata...`)
 
-    const apiMetadataJson = fs.readFileSync(apiMetadataPath).toString()
+    const apiMetadataJson = nodefs.readFileSync(apiMetadataPath).toString()
     const apiMetadata = JSON.parse(apiMetadataJson) as ApiMetadata
 
-    serviceNames.forEach(serviceName => {
+    for (const serviceName of serviceNames) {
         apiMetadata[serviceName.toLowerCase()] = { name: serviceName }
-    })
+    }
 
-    fs.writeFileSync(apiMetadataPath, JSON.stringify(apiMetadata, undefined, 4))
+    nodefs.writeFileSync(apiMetadataPath, JSON.stringify(apiMetadata, undefined, 4))
 }
 
 /**
@@ -164,7 +164,7 @@ async function patchServicesIntoApiMetadata(apiMetadataPath: string, serviceName
 async function runTypingsGenerator(repoPath: string): Promise<void> {
     console.log('Generating service client typings...')
 
-    const stdout = child_process.execFileSync('node', ['scripts/typings-generator.js'], {
+    const stdout = proc.execFileSync('node', ['scripts/typings-generator.js'], {
         encoding: 'utf8',
         cwd: repoPath,
     })
@@ -197,7 +197,7 @@ async function integrateServiceClient(repoPath: string, serviceJsonPath: string,
 
     console.log(`Integrating ${typingsFilename} ...`)
 
-    fs.copyFileSync(sourceClientPath, destinationClientPath)
+    nodefs.copyFileSync(sourceClientPath, destinationClientPath)
 
     await sanitizeServiceClient(destinationClientPath)
 }
@@ -208,7 +208,7 @@ async function integrateServiceClient(repoPath: string, serviceJsonPath: string,
 async function sanitizeServiceClient(generatedClientPath: string): Promise<void> {
     console.log('Altering Service Client to fit the codebase...')
 
-    let fileContents = fs.readFileSync(generatedClientPath).toString()
+    let fileContents = nodefs.readFileSync(generatedClientPath).toString()
 
     // Add a header stating the file is autogenerated
     fileContents = `
@@ -222,7 +222,7 @@ ${fileContents}
 
     fileContents = fileContents.replace(/(import .* from.*)\.\.(.*)/g, '$1aws-sdk$2')
 
-    fs.writeFileSync(generatedClientPath, fileContents)
+    nodefs.writeFileSync(generatedClientPath, fileContents)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

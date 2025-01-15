@@ -5,6 +5,7 @@
 
 import * as vscode from 'vscode'
 import { isTextEditor } from '../../shared/utilities/editorUtilities'
+import { setContext } from '../../shared'
 
 export interface LineSelection {
     anchor: number
@@ -48,13 +49,13 @@ export class LineTracker implements vscode.Disposable {
 
     constructor() {
         this._disposable = vscode.Disposable.from(
-            vscode.window.onDidChangeActiveTextEditor(async e => {
+            vscode.window.onDidChangeActiveTextEditor(async (e) => {
                 await this.onActiveTextEditorChanged(e)
             }),
-            vscode.window.onDidChangeTextEditorSelection(async e => {
+            vscode.window.onDidChangeTextEditorSelection(async (e) => {
                 await this.onTextEditorSelectionChanged(e)
             }),
-            vscode.workspace.onDidChangeTextDocument(e => {
+            vscode.workspace.onDidChangeTextDocument((e) => {
                 this.onContentChanged(e)
             })
         )
@@ -84,8 +85,8 @@ export class LineTracker implements vscode.Disposable {
         this._editor = editor
         this._selections = toLineSelections(editor?.selections)
         if (this._selections && this._selections[0]) {
-            const s = this._selections.map(item => item.active + 1)
-            await vscode.commands.executeCommand('setContext', 'codewhisperer.activeLine', s)
+            const s = this._selections.map((item) => item.active + 1)
+            await setContext('codewhisperer.activeLine', s)
         }
 
         this.notifyLinesChanged('editor')
@@ -106,8 +107,8 @@ export class LineTracker implements vscode.Disposable {
         this._editor = e.textEditor
         this._selections = selections
         if (this._selections && this._selections[0]) {
-            const s = this._selections.map(item => item.active + 1)
-            await vscode.commands.executeCommand('setContext', 'codewhisperer.activeLine', s)
+            const s = this._selections.map((item) => item.active + 1)
+            await setContext('codewhisperer.activeLine', s)
         }
 
         this.notifyLinesChanged('selection')
@@ -115,8 +116,9 @@ export class LineTracker implements vscode.Disposable {
 
     // @VisibleForTesting
     onContentChanged(e: vscode.TextDocumentChangeEvent) {
-        if (e.document === vscode.window.activeTextEditor?.document && e.contentChanges.length > 0) {
-            this._editor = vscode.window.activeTextEditor
+        const editor = vscode.window.activeTextEditor
+        if (e.document === editor?.document && e.contentChanges.length > 0 && isTextEditor(editor)) {
+            this._editor = editor
             this._selections = toLineSelections(this._editor?.selections)
 
             this.notifyLinesChanged('content')
@@ -173,5 +175,5 @@ function isIncluded(selections: LineSelection[] | undefined, within: LineSelecti
 function toLineSelections(selections: readonly vscode.Selection[]): LineSelection[]
 function toLineSelections(selections: readonly vscode.Selection[] | undefined): LineSelection[] | undefined
 function toLineSelections(selections: readonly vscode.Selection[] | undefined) {
-    return selections?.map(s => ({ active: s.active.line, anchor: s.anchor.line }))
+    return selections?.map((s) => ({ active: s.active.line, anchor: s.anchor.line }))
 }

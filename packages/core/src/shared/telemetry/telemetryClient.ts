@@ -11,13 +11,13 @@ import * as vscode from 'vscode'
 import { extensionVersion, isAutomation } from '../vscode/env'
 import { getLogger } from '../logger'
 import * as ClientTelemetry from './clienttelemetry'
-import { MetricDatum } from './clienttelemetry'
+import { AWSProduct, MetricDatum } from './clienttelemetry'
 import apiConfig = require('./service-2.json')
 import { ServiceConfigurationOptions } from 'aws-sdk/lib/service'
 import globals from '../extensionGlobals'
 import { DevSettings } from '../settings'
 import { ClassToInterfaceType } from '../utilities/tsUtils'
-import { getComputeEnvType } from './util'
+import { getComputeEnvType, getSessionId } from './util'
 
 export const accountMetadataKey = 'awsAccount'
 export const regionKey = 'awsRegion'
@@ -56,7 +56,20 @@ export type TelemetryClient = ClassToInterfaceType<DefaultTelemetryClient>
 export class DefaultTelemetryClient implements TelemetryClient {
     private static readonly defaultIdentityPool = 'us-east-1:820fd6d1-95c0-4ca4-bffb-3f01d32da842'
     private static readonly defaultTelemetryEndpoint = 'https://client-telemetry.us-east-1.amazonaws.com'
-    private static readonly productName = 'AWS Toolkit For VS Code'
+
+    static #productName: AWSProduct
+
+    public static set productName(val: AWSProduct) {
+        getLogger().info(`Telemetry product: ${val}`)
+        this.#productName = val
+    }
+
+    public static get productName() {
+        if (!this.#productName) {
+            throw new Error('DefaultTelemetryClient.productName is not initialized.')
+        }
+        return this.#productName
+    }
 
     private static initializeConfig(): TelemetryConfiguration {
         const settings = DevSettings.instance
@@ -71,7 +84,10 @@ export class DefaultTelemetryClient implements TelemetryClient {
 
     private readonly logger = getLogger()
 
-    private constructor(private readonly clientId: string, private readonly client: ClientTelemetry) {}
+    private constructor(
+        private readonly clientId: string,
+        private readonly client: ClientTelemetry
+    ) {}
 
     /**
      * Returns failed events
@@ -90,9 +106,10 @@ export class DefaultTelemetryClient implements TelemetryClient {
                         AWSProduct: DefaultTelemetryClient.productName,
                         AWSProductVersion: extensionVersion,
                         ClientID: this.clientId,
+                        SessionID: getSessionId(),
                         OS: os.platform(),
                         OSVersion: os.release(),
-                        ComputeEnv: getComputeEnvType(),
+                        ComputeEnv: await getComputeEnvType(),
                         ParentProduct: vscode.env.appName,
                         ParentProductVersion: vscode.version,
                         MetricData: batch,
@@ -119,14 +136,14 @@ export class DefaultTelemetryClient implements TelemetryClient {
                     AWSProductVersion: extensionVersion,
                     OS: os.platform(),
                     OSVersion: os.release(),
-                    ComputeEnv: getComputeEnvType(),
+                    ComputeEnv: await getComputeEnvType(),
                     ParentProduct: vscode.env.appName,
                     ParentProductVersion: vscode.version,
                     Comment: feedback.comment,
                     Sentiment: feedback.sentiment,
                 })
                 .promise()
-            this.logger.debug(`ComputeEnv detected for telemetry: ${getComputeEnvType()}`)
+            this.logger.debug(`ComputeEnv detected for telemetry: ${await getComputeEnvType()}`)
             this.logger.info('Successfully posted feedback')
         } catch (err) {
             this.logger.error(`Failed to post feedback: ${err}`)

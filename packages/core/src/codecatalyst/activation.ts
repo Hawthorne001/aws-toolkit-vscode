@@ -8,22 +8,26 @@ import * as vscode from 'vscode'
 import * as nls from 'vscode-nls'
 import { ExtContext } from '../shared/extensions'
 import { CodeCatalystRemoteSourceProvider } from './repos/remoteSourceProvider'
-import { CodeCatalystCommands } from './commands'
+import { CodeCatalystCommands, codecatalystConnectionsCmd } from './commands'
 import { GitExtension } from '../shared/extensions/git'
 import { CodeCatalystAuthenticationProvider } from './auth'
-import { registerDevfileWatcher } from './devfile'
-import { DevEnvClient, DevEnvActivity } from '../shared/clients/devenvClient'
+import { registerDevfileWatcher, updateDevfileCommand } from './devfile'
+import { DevEnvClient } from '../shared/clients/devenvClient'
 import { watchRestartingDevEnvs } from './reconnect'
-import { PromptSettings } from '../shared/settings'
+import { ToolkitPromptSettings } from '../shared/settings'
 import { dontShow } from '../shared/localizedText'
 import { getIdeProperties, isCloud9 } from '../shared/extensionUtilities'
-import { Commands, placeholder } from '../shared/vscode/commands2'
+import { Commands } from '../shared/vscode/commands2'
 import { getCodeCatalystConfig } from '../shared/clients/codecatalystClient'
 import { isDevenvVscode } from './utils'
-import { getThisDevEnv } from './model'
+import { codeCatalystConnectCommand, getThisDevEnv } from './model'
 import { getLogger } from '../shared/logger/logger'
-import { InactivityMessage, shouldTrackUserActivity } from './devEnv'
-import { showManageConnections } from '../auth/ui/vue/show'
+import { DevEnvActivityStarter } from './devEnv'
+import { learnMoreCommand, onboardCommand, reauth } from './explorer'
+import { isInDevEnv } from '../shared/vscode/env'
+import { hasScopes, scopesCodeWhispererCore, getTelemetryMetadataForConn } from '../auth/connection'
+import { telemetry } from '../shared/telemetry/telemetry'
+import { asStringifiedStack } from '../shared/telemetry/spans'
 
 const localize = nls.loadMessageBundle()
 
@@ -35,21 +39,47 @@ export async function activate(ctx: ExtContext): Promise<void> {
     const commands = new CodeCatalystCommands(authProvider)
     const remoteSourceProvider = new CodeCatalystRemoteSourceProvider(commands, authProvider)
 
+    codeCatalystConnectCommand.register()
+    reauth.register()
+    onboardCommand.register()
+    updateDevfileCommand.register()
+    learnMoreCommand.register()
+
     await authProvider.restore()
+
+    // Forget Amazon Q connections while we transition to separate auth sessions per extension.
+    // Note: credentials on disk in the dev env cannot have Q scopes, so it will never be forgotten.
+    // TODO: Remove after some time?
+    if (authProvider.isConnected() && hasScopes(authProvider.activeConnection!, scopesCodeWhispererCore)) {
+        await telemetry.function_call.run(
+            async () => {
+                await telemetry.auth_modifyConnection.run(async () => {
+                    const conn = authProvider.activeConnection
+                    telemetry.record({
+                        action: 'forget',
+                        source: asStringifiedStack(telemetry.getFunctionStack()),
+                        connectionState: conn ? authProvider.auth.getConnectionState(conn) : undefined,
+                        ...(await getTelemetryMetadataForConn(conn)),
+                    })
+
+                    await authProvider.secondaryAuth.forgetConnection()
+                })
+            },
+            { emit: false, functionId: { name: 'activate', class: 'CodeCatalyst' } }
+        )
+    }
 
     ctx.extensionContext.subscriptions.push(
         uriHandlers.register(ctx.uriHandler, CodeCatalystCommands.declared),
-        ...Object.values(CodeCatalystCommands.declared).map(c => c.register(commands)),
-        Commands.register('aws.codecatalyst.manageConnections', () => {
-            return showManageConnections.execute(placeholder, 'codecatalystDeveloperTools', 'codecatalyst')
-        }),
+        ...Object.values(CodeCatalystCommands.declared).map((c) => c.register(commands)),
+        codecatalystConnectionsCmd.register(),
         Commands.register('aws.codecatalyst.signout', () => {
             return authProvider.secondaryAuth.deleteConnection()
         })
     )
 
     if (!isCloud9()) {
-        await GitExtension.instance.registerRemoteSourceProvider(remoteSourceProvider).then(disposable => {
+        await GitExtension.instance.registerRemoteSourceProvider(remoteSourceProvider).then((disposable) => {
             ctx.extensionContext.subscriptions.push(disposable)
         })
 
@@ -57,29 +87,35 @@ export async function activate(ctx: ExtContext): Promise<void> {
             .registerCredentialsProvider({
                 getCredentials(uri: vscode.Uri) {
                     if (uri.authority.endsWith(getCodeCatalystConfig().gitHostname)) {
-                        return commands.withClient(client => authProvider.getCredentialsForGit(client))
+                        return commands.withClient((client) => authProvider.getCredentialsForGit(client))
                     }
                 },
             })
-            .then(disposable => ctx.extensionContext.subscriptions.push(disposable))
+            .then((disposable) => ctx.extensionContext.subscriptions.push(disposable))
 
         watchRestartingDevEnvs(ctx, authProvider)
     }
 
-    const thisDevenv = (await getThisDevEnv(authProvider))?.unwrapOrElse(err => {
-        getLogger().warn('codecatalyst: failed to get current Dev Enviroment: %s', err)
+    const thisDevenv = (await getThisDevEnv(authProvider))?.unwrapOrElse((err) => {
+        getLogger().error('codecatalyst: failed to get current Dev Enviroment: %s', err)
         return undefined
     })
 
     if (!thisDevenv) {
-        getLogger().verbose('codecatalyst: not a devenv, getThisDevEnv() returned empty')
+        if (isInDevEnv()) {
+            getLogger().info('codecatalyst: Dev Environment timeout=unknown')
+        } else {
+            getLogger().verbose('codecatalyst: not a Dev Environment ($__DEV_ENVIRONMENT_ID is undefined)')
+        }
     } else {
         ctx.extensionContext.subscriptions.push(DevEnvClient.instance)
         if (DevEnvClient.instance.id) {
             ctx.extensionContext.subscriptions.push(registerDevfileWatcher(DevEnvClient.instance))
         }
 
-        getLogger().info('codecatalyst: Dev Environment ides=%O', thisDevenv?.summary.ides)
+        const timeoutMin = thisDevenv.summary.inactivityTimeoutMinutes
+        const timeout = timeoutMin === 0 ? 'never' : `${timeoutMin} min`
+        getLogger().info('codecatalyst: Dev Environment timeout=%s, ides=%O', timeout, thisDevenv.summary.ides)
         if (!isCloud9() && thisDevenv && !isDevenvVscode(thisDevenv.summary.ides)) {
             // Prevent Toolkit from reconnecting to a "non-vscode" devenv by actively closing it.
             // Can happen if devenv is switched to ides="cloud9", etc.
@@ -89,15 +125,15 @@ export async function activate(ctx: ExtContext): Promise<void> {
 
         await showReadmeFileOnFirstLoad(ctx.extensionContext.workspaceState)
 
-        const settings = PromptSettings.instance
-        if (await settings.isPromptEnabled('remoteConnected')) {
+        const settings = ToolkitPromptSettings.instance
+        if (settings.isPromptEnabled('remoteConnected')) {
             const message = localize(
                 'AWS.codecatalyst.connectedMessage',
                 'Welcome to your Amazon CodeCatalyst Dev Environment. For more options and information, view Dev Environment settings ({0} Extension > CodeCatalyst).',
                 getIdeProperties().company
             )
             const openDevEnvSettings = localize('AWS.codecatalyst.openDevEnvSettings', 'Open Dev Environment Settings')
-            void vscode.window.showInformationMessage(message, dontShow, openDevEnvSettings).then(async selection => {
+            void vscode.window.showInformationMessage(message, dontShow, openDevEnvSettings).then(async (selection) => {
                 if (selection === dontShow) {
                     await settings.disablePrompt('remoteConnected')
                 } else if (selection === openDevEnvSettings) {
@@ -105,17 +141,10 @@ export async function activate(ctx: ExtContext): Promise<void> {
                 }
             })
         }
-
-        const maxInactivityMinutes = thisDevenv.summary.inactivityTimeoutMinutes
-        const devEnvClient = thisDevenv.devenvClient
-        const devEnvActivity = await DevEnvActivity.instanceIfActivityTrackingEnabled(devEnvClient)
-        if (shouldTrackUserActivity(maxInactivityMinutes) && devEnvActivity) {
-            const inactivityMessage = new InactivityMessage()
-            await inactivityMessage.setupMessage(maxInactivityMinutes, devEnvActivity)
-
-            ctx.extensionContext.subscriptions.push(inactivityMessage, devEnvActivity)
-        }
     }
+
+    // This must always be called on activation
+    DevEnvActivityStarter.init(authProvider)
 }
 
 async function showReadmeFileOnFirstLoad(workspaceState: vscode.ExtensionContext['workspaceState']): Promise<void> {
@@ -123,7 +152,7 @@ async function showReadmeFileOnFirstLoad(workspaceState: vscode.ExtensionContext
         return
     }
 
-    getLogger().info('codecatalyst: showReadmeFileOnFirstLoad()')
+    getLogger().debug('codecatalyst: showReadmeFileOnFirstLoad()')
     // Check dev env state to see if this is the first time the user has connected to a dev env
     const isFirstLoad = workspaceState.get('aws.codecatalyst.devEnv.isFirstLoad', true)
 
@@ -136,7 +165,7 @@ async function showReadmeFileOnFirstLoad(workspaceState: vscode.ExtensionContext
     const readmePath = `README.md`
 
     // Find readme file in workspace
-    const readmeUri = await vscode.workspace.findFiles(readmePath).then(files => {
+    const readmeUri = await vscode.workspace.findFiles(readmePath).then((files) => {
         if (files.length === 0) {
             return undefined
         }
@@ -144,7 +173,7 @@ async function showReadmeFileOnFirstLoad(workspaceState: vscode.ExtensionContext
     })
 
     if (readmeUri === undefined) {
-        getLogger().info(`codecatalyst: README.md not found in path '${readmePath}'`)
+        getLogger().debug(`codecatalyst: README.md not found in path '${readmePath}'`)
         return
     }
 

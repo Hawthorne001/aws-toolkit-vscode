@@ -113,7 +113,7 @@ export async function createSearchSchemasWebView(context: ExtContext, node: Regi
         const client = new DefaultSchemaClient(node.regionCode)
         const registryNames = await getRegistryNames(node, client)
         if (registryNames.length === 0) {
-            await vscode.window.showInformationMessage(
+            void vscode.window.showInformationMessage(
                 localize('AWS.schemas.search.no_registries', 'No Schema Registries')
             )
 
@@ -151,7 +151,9 @@ export async function getRegistryNames(node: RegistryItemNode | SchemasNode, cli
     if (node instanceof SchemasNode) {
         try {
             const registries = await toArrayAsync(listRegistryItems(client))
-            registries.forEach(element => registryNames.push(element.RegistryName!))
+            for (const element of registries) {
+                registryNames.push(element.RegistryName!)
+            }
         } catch (err) {
             const error = err as Error
             getLogger().error(error)
@@ -215,7 +217,7 @@ export async function getSearchResults(
     let results: SchemaVersionedSummary[] = []
 
     await Promise.all(
-        registries.map(async registryName => {
+        registries.map(async (registryName) => {
             let prefix = ''
             if (registries.length !== 1) {
                 prefix = registryName.concat('/')
@@ -229,11 +231,11 @@ export async function getSearchResults(
 }
 
 export function getSchemaVersionedSummary(searchSummary: Schemas.SearchSchemaSummary[], prefix: string) {
-    const results = searchSummary.map(searchSchemaSummary => ({
+    const results = searchSummary.map((searchSchemaSummary) => ({
         RegistryName: searchSchemaSummary.RegistryName!,
         Title: prefix.concat(searchSchemaSummary.SchemaName!),
         VersionList: searchSchemaSummary
-            .SchemaVersions!.map(summary => summary.SchemaVersion!)
+            .SchemaVersions!.map((summary) => summary.SchemaVersion!)
             .sort(sortNumericStringsInDescendingOrder),
     }))
 

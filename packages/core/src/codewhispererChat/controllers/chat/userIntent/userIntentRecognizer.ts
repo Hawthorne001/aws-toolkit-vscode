@@ -6,16 +6,9 @@
 import { UserIntent } from '@amzn/codewhisperer-streaming'
 import { EditorContextCommand } from '../../../commands/registerCommands'
 import { PromptMessage } from '../model'
-import { OnboardingPageInteraction } from '../../../../amazonq/onboardingPage/model'
+import { Auth } from '../../../../auth'
 
 export class UserIntentRecognizer {
-    public getFromOnboardingPageInteraction(interaction: OnboardingPageInteraction): UserIntent | undefined {
-        switch (interaction.type) {
-            default:
-                return undefined
-        }
-    }
-
     public getFromContextMenuCommand(command: EditorContextCommand): UserIntent | undefined {
         switch (command.type) {
             case 'aws.amazonq.explainCode':
@@ -26,6 +19,8 @@ export class UserIntentRecognizer {
                 return UserIntent.APPLY_COMMON_BEST_PRACTICES
             case 'aws.amazonq.optimizeCode':
                 return UserIntent.IMPROVE_CODE
+            case 'aws.amazonq.generateUnitTests':
+                return UserIntent.GENERATE_UNIT_TESTS
             default:
                 return undefined
         }
@@ -44,6 +39,8 @@ export class UserIntentRecognizer {
             return UserIntent.APPLY_COMMON_BEST_PRACTICES
         } else if (prompt.message.startsWith('Optimize')) {
             return UserIntent.IMPROVE_CODE
+        } else if (prompt.message.startsWith('Generate unit tests') && Auth.instance.isInternalAmazonUser()) {
+            return UserIntent.GENERATE_UNIT_TESTS
         }
         return undefined
     }

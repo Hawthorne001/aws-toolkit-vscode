@@ -6,7 +6,7 @@
 import * as vscode from 'vscode'
 import * as GitTypes from '../../../types/git.d'
 import { SemVer, parse as semverParse } from 'semver'
-import { execFile } from 'child_process'
+import { execFile } from 'child_process' // eslint-disable-line no-restricted-imports
 import { promisify } from 'util'
 import { VSCODE_EXTENSION_ID } from '../extensions'
 import { makeTemporaryToolkitFolder, tryRemoveFolder } from '../filesystemUtilities'
@@ -159,7 +159,7 @@ export class GitExtension {
      * We hook into extension enablement to automatically re-add listeners.
      */
     private registerOpenRepositoryListener(api: GitTypes.API): vscode.Disposable {
-        return api.onDidOpenRepository(repo => {
+        return api.onDidOpenRepository((repo) => {
             this._onDidOpenRepository.fire(this.extendRepository(repo))
         })
     }
@@ -209,14 +209,18 @@ export class GitExtension {
     public async getRemotes(): Promise<GitTypes.Remote[]> {
         const api = await this.validateApi('git: api is disabled, returning empty array of remotes')
         const remotes: GitTypes.Remote[] = []
-        api?.repositories.forEach(repo => remotes.push(...repo.state.remotes))
+        if (api) {
+            for (const repo of api.repositories) {
+                remotes.push(...repo.state.remotes)
+            }
+        }
 
         return remotes
     }
 
     public async getRepositories(): Promise<Repository[]> {
         const api = await this.validateApi('git: api is disabled, returning empty array of repositories')
-        return api?.repositories.map(repo => this.extendRepository(repo)) ?? []
+        return api?.repositories.map((repo) => this.extendRepository(repo)) ?? []
     }
 
     /**
@@ -234,19 +238,19 @@ export class GitExtension {
         }
 
         const remotes = api?.repositories
-            .map(repo => repo.state.remotes.filter(other => other.fetchUrl === remote.fetchUrl))
+            .map((repo) => repo.state.remotes.filter((other) => other.fetchUrl === remote.fetchUrl))
             .reduce((a, b) => a.concat(b), [])
 
-        api.repositories.forEach(repo =>
+        for (const repo of api.repositories) {
             branches.push(
                 ...repo.state.refs.filter(
                     (ref: GitTypes.Ref) =>
                         ref.type === GitTypes.RefType.RemoteHead &&
                         !ref.name?.endsWith('HEAD') &&
-                        remotes.some(remote => remote.name === ref.remote)
+                        remotes.some((remote) => remote.name === ref.remote)
                 )
             )
-        )
+        }
 
         getLogger().debug(`git: found ${branches.length} branches from local repositories`)
 
@@ -267,12 +271,12 @@ export class GitExtension {
                 return stdout
                     .toString()
                     .split(/\r?\n/)
-                    .map(branch => ({
+                    .map((branch) => ({
                         name: branch.replace(/.*refs\/heads\//, 'head/'),
                         remote: remote.name,
                         type: GitTypes.RefType.RemoteHead,
                     }))
-                    .filter(branch => !!branch.name)
+                    .filter((branch) => !!branch.name)
             } catch (err) {
                 getLogger().verbose(`git: failed to get branches for remote "${remote.fetchUrl}": %s`, err)
                 return []
@@ -289,18 +293,21 @@ export class GitExtension {
         if (!api) {
             return config
         } else if (repository) {
-            ;(await repository.getConfigs()).forEach(({ key, value }) => (config[key] = value))
+            for (const { key, value } of await repository.getConfigs()) {
+                config[key] = value
+            }
         } else {
-            const { stdout } = await this.execFileAsync(api.git.path, ['config', '--list', `--global`]).catch(err => {
+            const { stdout } = await this.execFileAsync(api.git.path, ['config', '--list', `--global`]).catch((err) => {
                 getLogger().verbose(`git: failed to read config: %s`, err)
                 return { stdout: '' }
             })
 
-            stdout
+            for (const [k, v] of stdout
                 .toString()
                 .split(/\r?\n/)
-                .map(l => l.split('='))
-                .forEach(([k, v]) => (config[k] = v))
+                .map((l) => l.split('='))) {
+                config[k] = v
+            }
         }
 
         return config
@@ -341,8 +348,8 @@ export class GitExtension {
 
         if (version === undefined || version.compare(minGitFilterVersion) === -1) {
             throw new Error(
-                `Git version is too low or could not be determined (min=${minGitFilterVersion}): ${
-                    version ?? 'unknown'
+                `Git version is too low or could not be determined (min=${minGitFilterVersion.version}): ${
+                    version?.version ?? 'unknown'
                 }`
             )
         }
@@ -365,7 +372,7 @@ export class GitExtension {
                 .toString()
                 .slice(0, -1) // remove trailing null character
                 .split(/\0/)
-                .map(s => s.split(/\s/))
+                .map((s) => s.split(/\s/))
                 .map(([mode, type, hash, name]) => ({
                     name,
                     read: async () => {

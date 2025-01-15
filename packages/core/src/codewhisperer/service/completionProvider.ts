@@ -16,10 +16,10 @@ import path from 'path'
  */
 export function getCompletionItems(document: vscode.TextDocument, position: vscode.Position) {
     const completionItems: vscode.CompletionItem[] = []
-    session.recommendations.forEach((recommendation, index) => {
+    for (const [index, recommendation] of session.recommendations.entries()) {
         completionItems.push(getCompletionItem(document, position, recommendation, index))
         session.setSuggestionState(index, 'Showed')
-    })
+    }
     return completionItems
 }
 
@@ -50,12 +50,12 @@ export function getCompletionItem(
     if (recommendationDetail.references !== undefined && recommendationDetail.references.length > 0) {
         references = recommendationDetail.references
         const licenses = [
-            ...new Set(references.map(r => `[${r.licenseName}](${LicenseUtil.getLicenseHtml(r.licenseName)})`)),
+            ...new Set(references.map((r) => `[${r.licenseName}](${LicenseUtil.getLicenseHtml(r.licenseName)})`)),
         ].join(', ')
         completionItem.documentation.appendMarkdown(CodeWhispererConstants.suggestionDetailReferenceText(licenses))
     }
     completionItem.command = {
-        command: 'aws.codeWhisperer.accept',
+        command: 'aws.amazonq.accept',
         title: 'On acceptance',
         arguments: [
             range,

@@ -5,98 +5,60 @@
 
 import * as vscode from 'vscode'
 import * as nls from 'vscode-nls'
-import { Command, Commands, placeholder } from '../../shared/vscode/commands2'
+import { Commands } from '../../shared/vscode/commands2'
 import { getIcon } from '../../shared/icons'
-import { reconnect } from '../../codewhisperer/commands/basicCommands'
-import { transformByQState } from '../../codewhisperer/models/model'
-import * as CodeWhispererConstants from '../../codewhisperer/models/constants'
+import { installAmazonQExtension } from '../../codewhisperer/commands/basicCommands'
 import { amazonQHelpUrl } from '../../shared/constants'
 import { cwTreeNodeSource } from '../../codewhisperer/commands/types'
-import { telemetry } from '../../shared/telemetry/telemetry'
-import { focusAmazonQPanel } from '../../auth/ui/vue/show'
-import { showTransformByQ } from '../../amazonqGumby/commands'
-import { DataQuickPickItem } from '../../shared/ui/pickerPrompter'
-import { TreeNode } from '../../shared/treeview/resourceTreeDataProvider'
+import { VSCODE_EXTENSION_ID } from '../../shared/extensions'
+import { globals, setContext } from '../../shared'
+import { ExtStartUpSources, telemetry } from '../../shared/telemetry'
+import { ExtensionUse } from '../../auth/utils'
 
 const localize = nls.loadMessageBundle()
 
-export const learnMoreAmazonQCommand = Commands.declare('aws.amazonq.learnMore', () => () => {
+export const learnMoreAmazonQCommand = Commands.declare('aws.toolkit.amazonq.learnMore', () => () => {
     void vscode.env.openExternal(vscode.Uri.parse(amazonQHelpUrl))
 })
 
+export const qExtensionPageCommand = Commands.declare('aws.toolkit.amazonq.extensionpage', () => () => {
+    void vscode.env.openExternal(vscode.Uri.parse(`vscode:extension/${VSCODE_EXTENSION_ID.amazonq}`))
+})
+
+export const dismissQTree = Commands.declare(
+    { id: '_aws.toolkit.amazonq.dismiss', compositeKey: { 0: 'source' } },
+    () => async (source: string) => {
+        await telemetry.toolkit_invokeAction.run(async () => {
+            telemetry.record({
+                source: ExtensionUse.instance.isFirstUse() ? ExtStartUpSources.firstStartUp : ExtStartUpSources.none,
+            })
+
+            await globals.globalState.update('aws.toolkit.amazonq.dismissed', true)
+            await setContext('aws.toolkit.amazonq.dismissed', true)
+
+            telemetry.record({ action: 'dismissQExplorerTree' })
+        })
+    }
+)
+
+// Learn more button of Amazon Q now opens the Amazon Q marketplace page.
 export const createLearnMoreNode = () =>
-    learnMoreAmazonQCommand.build().asTreeNode({
-        label: localize('AWS.amazonq.learnMore', 'Learn More About Amazon Q (Preview)'),
+    qExtensionPageCommand.build().asTreeNode({
+        label: localize('AWS.amazonq.learnMore', 'Learn More About Amazon Q'),
         iconPath: getIcon('vscode-question'),
         contextValue: 'awsAmazonQLearnMoreNode',
     })
 
-export const switchToAmazonQCommand = Commands.declare('_aws.amazonq.focusView', () => () => {
-    telemetry.ui_click.emit({
-        elementId: 'amazonq_switchToQChat',
-        passive: false,
+export function createInstallQNode() {
+    return installAmazonQExtension.build().asTreeNode({
+        label: 'Install the Amazon Q Extension', // TODO: localize
+        iconPath: getIcon('vscode-extensions'),
     })
-    void focusAmazonQPanel()
-})
-
-export function switchToAmazonQNode(type: 'item'): DataQuickPickItem<'openChatPanel'>
-export function switchToAmazonQNode(type: 'tree'): TreeNode<Command>
-export function switchToAmazonQNode(type: 'item' | 'tree'): DataQuickPickItem<'openChatPanel'> | TreeNode<Command>
-export function switchToAmazonQNode(type: 'item' | 'tree'): any {
-    switch (type) {
-        case 'tree':
-            return switchToAmazonQCommand.build().asTreeNode({
-                label: 'Open Chat Panel',
-                iconPath: getIcon('vscode-comment'),
-                contextValue: 'awsToAmazonQChatNode',
-            })
-        case 'item':
-            return {
-                data: 'openChatPanel',
-                label: 'Open Chat Panel',
-                iconPath: getIcon('vscode-comment'),
-                onClick: () => switchToAmazonQCommand.execute(),
-            } as DataQuickPickItem<'openChatPanel'>
-    }
 }
 
-/*
- * This node is meant to be displayed when the user's active connection is missing scopes required for Amazon Q.
- * For example, users with active CodeWhisperer connections who updates to a toolkit version with Amazon Q (Preview)
- * will be missing these scopes.
- */
-export const enableAmazonQNode = () =>
-    // Simply trigger re-auth to obtain the proper scopes- same functionality as if requested in the chat window.
-    reconnect.build(placeholder, cwTreeNodeSource, true).asTreeNode({
-        label: localize('AWS.amazonq.enable', 'Enable'),
-        iconPath: getIcon('vscode-debug-start'),
-        contextValue: 'awsEnableAmazonQ',
-    })
-
-export const createTransformByQ = () => {
-    const prefix = transformByQState.getPrefixTextForButton()
-    let status = transformByQState.getPolledJobStatus().toLowerCase()
-    if (transformByQState.isRunning()) {
-        void vscode.commands.executeCommand('setContext', 'gumby.isTransformAvailable', false)
-        if (status === '') {
-            // job is running but polling has not started yet, so display generic message
-            status = CodeWhispererConstants.transformByQStateRunningMessage
-        }
-    } else if (transformByQState.isCancelled()) {
-        status = CodeWhispererConstants.transformByQStateCancellingMessage
-    } else if (transformByQState.isFailed()) {
-        status = CodeWhispererConstants.transformByQStateFailedMessage
-    } else if (transformByQState.isSucceeded()) {
-        status = CodeWhispererConstants.transformByQStateSucceededMessage
-    } else if (transformByQState.isPartiallySucceeded()) {
-        status = CodeWhispererConstants.transformByQStatePartialSuccessMessage
-    } else if (transformByQState.isNotStarted()) {
-        status = ''
-    }
-    return showTransformByQ.build(CodeWhispererConstants.transformTreeNode).asTreeNode({
-        label: status !== '' ? `${prefix} Transform [Job status: ` + status + `]` : `Transform`,
-        iconPath: transformByQState.getIconForButton(),
-        tooltip: `${prefix} Transform`,
-        contextValue: `${prefix}TransformByQ`,
+export function createDismissNode() {
+    return dismissQTree.build(cwTreeNodeSource).asTreeNode({
+        label: 'Dismiss', // TODO: localize
+        iconPath: getIcon('vscode-close'),
     })
 }

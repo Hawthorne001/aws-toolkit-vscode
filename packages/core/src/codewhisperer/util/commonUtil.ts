@@ -5,11 +5,14 @@
 
 import * as vscode from 'vscode'
 import * as semver from 'semver'
+import { distance } from 'fastest-levenshtein'
 import { isCloud9 } from '../../shared/extensionUtilities'
 import { getInlineSuggestEnabled } from '../../shared/utilities/editorUtilities'
-import { getLogger } from '../../shared/logger'
-import globals from '../../shared/extensionGlobals'
-import { AWSTemplateCaseInsensitiveKeyWords, AWSTemplateKeyWords } from '../models/constants'
+import {
+    AWSTemplateCaseInsensitiveKeyWords,
+    AWSTemplateKeyWords,
+    JsonConfigFileNamingConvention,
+} from '../models/constants'
 
 export function getLocalDatetime() {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -21,7 +24,7 @@ export function asyncCallWithTimeout<T>(asyncPromise: Promise<T>, message: strin
     const timeoutPromise = new Promise((_resolve, reject) => {
         timeoutHandle = setTimeout(() => reject(new Error(message)), timeLimit)
     })
-    return Promise.race([asyncPromise, timeoutPromise]).then(result => {
+    return Promise.race([asyncPromise, timeoutPromise]).then((result) => {
         clearTimeout(timeoutHandle)
         return result as T
     })
@@ -63,30 +66,23 @@ export function getPrefixSuffixOverlap(firstString: string, secondString: string
     return secondString.slice(0, i)
 }
 
-export function getOptOutPreference() {
-    return globals.telemetry.telemetryEnabled ? 'OPTIN' : 'OPTOUT'
-}
-
-export function get(key: string, context: vscode.Memento): any {
-    return context.get(key)
-}
-
-export async function set(key: string, value: any, context: vscode.Memento): Promise<void> {
-    await context.update(key, value).then(
-        () => {},
-        error => {
-            getLogger().verbose(`Failed to update global state: ${error}`)
-        }
-    )
-}
-
-export function checkLeftContextKeywordsForJsonAndYaml(leftFileContent: string, language: string): boolean {
+export function checkLeftContextKeywordsForJson(fileName: string, leftFileContent: string, language: string): boolean {
     if (
-        (language === 'json' || language === 'yaml') &&
-        !AWSTemplateKeyWords.some(substring => leftFileContent.includes(substring)) &&
-        !AWSTemplateCaseInsensitiveKeyWords.some(substring => leftFileContent.toLowerCase().includes(substring))
+        language === 'json' &&
+        !AWSTemplateKeyWords.some((substring) => leftFileContent.includes(substring)) &&
+        !AWSTemplateCaseInsensitiveKeyWords.some((substring) => leftFileContent.toLowerCase().includes(substring)) &&
+        !JsonConfigFileNamingConvention.has(fileName.toLowerCase())
     ) {
         return true
     }
     return false
+}
+
+// With edit distance, complicate usermodification can be considered as simple edit(add, delete, replace),
+// and thus the unmodified part of recommendation length can be deducted/approximated
+// ex. (modified > original): originalRecom: foo -> modifiedRecom: fobarbarbaro, distance = 9, delta = 12 - 9 = 3
+// ex. (modified == original): originalRecom: helloworld -> modifiedRecom: HelloWorld, distance = 2, delta = 10 - 2 = 8
+// ex. (modified < original): originalRecom: CodeWhisperer -> modifiedRecom: CODE, distance = 12, delta = 13 - 12 = 1
+export function getUnmodifiedAcceptedTokens(origin: string, after: string) {
+    return Math.max(origin.length, after.length) - distance(origin, after)
 }
