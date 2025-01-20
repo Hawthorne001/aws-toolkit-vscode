@@ -9,27 +9,26 @@
 import assert from 'assert'
 import * as sinon from 'sinon'
 import vscode from 'vscode'
-import { appendFileSync, mkdirpSync, remove } from 'fs-extra'
 import { join } from 'path'
-import { format } from 'util'
 import globals from '../shared/extensionGlobals'
-import { VSCODE_EXTENSION_ID } from '../shared/extensions'
 import { CodelensRootRegistry } from '../shared/fs/codelensRootRegistry'
 import { CloudFormationTemplateRegistry } from '../shared/fs/templateRegistry'
 import { getLogger, LogLevel } from '../shared/logger'
-import { setLogger } from '../shared/logger/logger'
-import { activateExtension } from '../shared/utilities/vsCodeUtils'
-import { FakeExtensionContext, FakeMemento } from './fakeExtensionContext'
+import { setLogger, TopicLogger } from '../shared/logger/logger'
+import { FakeExtensionContext } from './fakeExtensionContext'
 import { TestLogger } from './testLogger'
 import * as testUtil from './testUtil'
 import { getTestWindow, resetTestWindow } from './shared/vscode/window'
 import { mapTestErrors, normalizeError, setRunnableTimeout } from './setupUtil'
 import { TelemetryDebounceInfo } from '../shared/vscode/commands2'
 import { disableAwsSdkWarning } from '../shared/awsClientBuilder'
-import { setCodeScanLogsOutputChannelId, codeScanLogsOutputChannelId } from '../codewhisperer/models/constants'
+import { GlobalState } from '../shared/globalState'
+import { FeatureConfigProvider } from '../shared/featureConfig'
+import { mockFeatureConfigsData } from './fake/mockFeatureConfigData'
+import { fs } from '../shared'
+import { promises as nodefs } from 'fs' // eslint-disable-line no-restricted-imports
 
 disableAwsSdkWarning()
-
 const testReportDir = join(__dirname, '../../../../../.test-reports') // Root project, not subproject
 const testLogOutput = join(testReportDir, 'testLog.log')
 const globalSandbox = sinon.createSandbox()
@@ -40,27 +39,38 @@ let testLogger: TestLogger | undefined
 let openExternalStub: sinon.SinonStub<Parameters<(typeof vscode)['env']['openExternal']>, Thenable<boolean>>
 // let executeCommandSpy: sinon.SinonSpy | undefined
 
-export async function mochaGlobalSetup(this: Mocha.Runner) {
-    // Clean up and set up test logs
-    try {
-        await remove(testLogOutput)
-    } catch (e) {}
-    mkdirpSync(testReportDir)
+export async function mochaGlobalSetup(extensionId: string) {
+    return async function (this: Mocha.Runner) {
+        // Clean up and set up test logs
+        // Use nodefs instead of our fs module (which uses globals.isWeb, which is not initialized yet).
+        await nodefs.rm(testLogOutput, { force: true })
+        await nodefs.mkdir(testReportDir, { recursive: true })
 
-    // Shows the full error chain when tests fail
-    mapTestErrors(this, normalizeError)
+        sinon.stub(FeatureConfigProvider.prototype, 'listFeatureEvaluations').resolves({
+            featureEvaluations: mockFeatureConfigsData,
+        })
 
-    // Extension activation has many side-effects such as changing globals
-    // For stability in tests we will wait until the extension has activated prior to injecting mocks
-    const activationLogger = (msg: string, ...meta: any[]) => console.log(format(msg, ...meta))
-    setCodeScanLogsOutputChannelId(
-        codeScanLogsOutputChannelId.replace(VSCODE_EXTENSION_ID.awstoolkit, VSCODE_EXTENSION_ID.awstoolkitcore)
-    )
-    await activateExtension(VSCODE_EXTENSION_ID.awstoolkitcore, false, activationLogger)
-    const fakeContext = await FakeExtensionContext.create()
-    fakeContext.globalStorageUri = (await testUtil.createTestWorkspaceFolder('globalStoragePath')).uri
-    fakeContext.extensionPath = globals.context.extensionPath
-    Object.assign(globals, { context: fakeContext })
+        // Shows the full error chain when tests fail
+        mapTestErrors(this, normalizeError)
+        const ext = vscode.extensions.getExtension(extensionId)
+        if (!ext) {
+            setTimeout(() => process.exit(1), 4000) // Test process will hang otherwise, but give time to report thrown error.
+            throw new Error(
+                `Could not activate extension for tests: ${extensionId} not found. Is 'extensionDevelopmentPath' configured correctly?` +
+                    ' Does the path have a proper vscode extension package.json?'
+            )
+        }
+        await ext.activate()
+
+        const fakeContext = await FakeExtensionContext.create()
+        fakeContext.globalStorageUri = (await testUtil.createTestWorkspaceFolder('globalStoragePath')).uri
+        fakeContext.extensionPath = globals.context.extensionPath
+        Object.assign(globals, {
+            context: fakeContext,
+            // eslint-disable-next-line aws-toolkits/no-banned-usages
+            globalState: new GlobalState(fakeContext.globalState),
+        })
+    }
 }
 
 export async function mochaGlobalTeardown(this: Mocha.Context) {
@@ -87,13 +97,17 @@ export const mochaHooks = {
         }
 
         // Enable telemetry features for tests. The metrics won't actually be posted.
-        globals.telemetry.telemetryEnabled = true
+        await globals.telemetry.setTelemetryEnabled(true)
         globals.telemetry.clearRecords()
         globals.telemetry.logger.clear()
         TelemetryDebounceInfo.instance.clear()
-        ;(globals.context as FakeExtensionContext).globalState = new FakeMemento()
+
+        // mochaGlobalSetup() set this to a fake, so it's safe to clear it here.
+        await globals.globalState.clear()
 
         await testUtil.closeAllEditors()
+        await fs.delete(globals.context.globalStorageUri.fsPath, { recursive: true, force: true })
+        await fs.mkdir(globals.context.globalStorageUri.fsPath)
     },
     async afterEach(this: Mocha.Context) {
         if (openExternalStub.called && openExternalStub.returned(sinon.match.typeOf('undefined'))) {
@@ -105,7 +119,7 @@ export const mochaHooks = {
         }
 
         // Prevent other tests from using the same TestLogger instance
-        teardownTestLogger(this.currentTest?.fullTitle() as string)
+        await teardownTestLogger(this.currentTest?.fullTitle() as string)
         testLogger = undefined
         resetTestWindow()
         const r = await globals.templateRegistry
@@ -122,7 +136,7 @@ export const mochaHooks = {
  * Verifies that the TestLogger instance is still the one set as the toolkit's logger.
  */
 export function getTestLogger(): TestLogger {
-    const logger = getLogger()
+    const logger = getLogger() instanceof TopicLogger ? (getLogger() as TopicLogger).logger : getLogger()
     assert.strictEqual(logger, testLogger, 'The expected test logger is not the current logger')
     assert.ok(testLogger, 'TestLogger was expected to exist')
 
@@ -134,40 +148,38 @@ function setupTestLogger(): TestLogger {
     // That way, we don't have to worry about which channel is being logged to for inspection.
     const logger = new TestLogger()
     setLogger(logger, 'main')
-    setLogger(logger, 'channel')
     setLogger(logger, 'debugConsole')
 
     return logger
 }
 
-function teardownTestLogger(testName: string) {
-    writeLogsToFile(testName)
+async function teardownTestLogger(testName: string) {
+    await writeLogsToFile(testName)
 
     setLogger(undefined, 'main')
-    setLogger(undefined, 'channel')
     setLogger(undefined, 'debugConsole')
 }
 
-function writeLogsToFile(testName: string) {
+async function writeLogsToFile(testName: string) {
     const entries = testLogger?.getLoggedEntries()
     entries?.unshift(`=== Starting test "${testName}" ===`)
     entries?.push(`=== Ending test "${testName}" ===\n\n`)
-    appendFileSync(testLogOutput, entries?.join('\n') ?? '', 'utf8')
+    await fs.appendFile(testLogOutput, entries?.join('\n') ?? '')
 }
 
+// TODO: merge this with `toolkitLogger.test.ts:checkFile`
 export function assertLogsContain(text: string, exactMatch: boolean, severity: LogLevel) {
+    const logs = getTestLogger().getLoggedEntries(severity)
     assert.ok(
-        getTestLogger()
-            .getLoggedEntries(severity)
-            .some(e =>
-                e instanceof Error
-                    ? exactMatch
-                        ? e.message === text
-                        : e.message.includes(text)
-                    : exactMatch
-                    ? e === text
-                    : e.includes(text)
-            ),
+        logs.some((e) =>
+            e instanceof Error
+                ? exactMatch
+                    ? e.message === text
+                    : e.message.includes(text)
+                : exactMatch
+                  ? e === text
+                  : e.includes(text)
+        ),
         `Expected to find "${text}" in the logs as type "${severity}"`
     )
 }

@@ -8,31 +8,30 @@ import { DevEnvironment } from '../shared/clients/codecatalystClient'
 import { isCloud9 } from '../shared/extensionUtilities'
 import { addColor, getIcon } from '../shared/icons'
 import { TreeNode } from '../shared/treeview/resourceTreeDataProvider'
-import { Commands, placeholder } from '../shared/vscode/commands2'
+import { Commands } from '../shared/vscode/commands2'
 import { CodeCatalystAuthenticationProvider } from './auth'
-import { CodeCatalystCommands } from './commands'
+import { CodeCatalystCommands, codecatalystConnectionsCmd } from './commands'
 import { ConnectedDevEnv, getDevfileLocation, getThisDevEnv } from './model'
 import * as codecatalyst from './model'
 import { getLogger } from '../shared/logger'
-import { Connection } from '../auth/connection'
+import { SsoConnection } from '../auth/connection'
 import { openUrl } from '../shared/utilities/vsCodeUtils'
-import { showManageConnections } from '../auth/ui/vue/show'
 
-const learnMoreCommand = Commands.register('aws.learnMore', async (docsUrl: vscode.Uri) => {
+export const learnMoreCommand = Commands.declare('aws.learnMore', () => async (docsUrl: vscode.Uri) => {
     return openUrl(docsUrl)
 })
 
 // Only used in rare cases on C9
-const reauth = Commands.register(
+export const reauth = Commands.declare(
     '_aws.codecatalyst.reauthenticate',
-    async (conn: Connection, authProvider: CodeCatalystAuthenticationProvider) => {
-        await authProvider.auth.reauthenticate(conn)
+    () => async (conn: SsoConnection, authProvider: CodeCatalystAuthenticationProvider) => {
+        await authProvider.reauthenticate(conn)
     }
 )
 
-const onboardCommand = Commands.register(
+export const onboardCommand = Commands.declare(
     '_aws.codecatalyst.onboard',
-    async (authProvider: CodeCatalystAuthenticationProvider) => {
+    () => async (authProvider: CodeCatalystAuthenticationProvider) => {
         void authProvider.promptOnboarding()
     }
 )
@@ -44,9 +43,20 @@ async function getLocalCommands(auth: CodeCatalystAuthenticationProvider) {
         iconPath: getIcon('vscode-question'),
     })
 
-    if (!auth.activeConnection || !auth.isConnectionValid()) {
+    // There is a connection, but it is expired, or CodeCatalyst scopes are expired.
+    if (auth.activeConnection && !auth.isConnectionValid()) {
         return [
-            showManageConnections.build(placeholder, 'codecatalystDeveloperTools', 'codecatalyst').asTreeNode({
+            reauth.build(auth.activeConnection, auth).asTreeNode({
+                label: 'Re-authenticate to connect',
+                iconPath: addColor(getIcon('vscode-debug-disconnect'), 'notificationsErrorIcon.foreground'),
+            }),
+            learnMoreNode,
+        ]
+    }
+
+    if (!auth.activeConnection) {
+        return [
+            codecatalystConnectionsCmd.build().asTreeNode({
                 label: 'Sign in to get started',
                 iconPath: getIcon('vscode-account'),
             }),
@@ -129,7 +139,8 @@ export class CodeCatalystRootNode implements TreeNode {
 
     public constructor(private readonly authProvider: CodeCatalystAuthenticationProvider) {
         this.addRefreshEmitter(() => this.onDidChangeEmitter.fire())
-        this.authProvider.onDidChangeActiveConnection(() => {
+
+        this.authProvider.onDidChange(() => {
             for (const fire of this.refreshEmitters) {
                 fire()
             }
@@ -211,12 +222,12 @@ export class CodeCatalystRootNode implements TreeNode {
         }
         let resolve: ((val: boolean) => void) | undefined
         if (this.resolveDevEnv === undefined) {
-            this.resolveDevEnv = new Promise<boolean>(res => {
+            this.resolveDevEnv = new Promise<boolean>((res) => {
                 resolve = res
             })
         }
 
-        this.devenv = (await getThisDevEnv(this.authProvider))?.unwrapOrElse(e => {
+        this.devenv = (await getThisDevEnv(this.authProvider))?.unwrapOrElse((e) => {
             const err = e as Error
             getLogger().warn('codecatalyst: failed to get current Dev Enviroment: %s', err.message)
             return undefined

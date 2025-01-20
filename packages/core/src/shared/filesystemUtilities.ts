@@ -10,8 +10,9 @@ import * as vscode from 'vscode'
 import { getLogger } from './logger'
 import * as pathutils from './utilities/pathUtils'
 import globals from '../shared/extensionGlobals'
-import { GlobalState } from './globalState'
-import { fsCommon } from '../srcShared/fs'
+import fs from '../shared/fs/fs'
+import { ToolkitError } from './errors'
+import * as nodeFs from 'fs/promises'
 
 export const tempDirPath = path.join(
     // https://github.com/aws/aws-toolkit-vscode/issues/240
@@ -19,18 +20,15 @@ export const tempDirPath = path.join(
     'aws-toolkit-vscode'
 )
 
-export async function getDirSize(
-    dirPath: string,
-    startTime: number,
-    duration: number,
-    fileExt: string
-): Promise<number> {
+export const testGenerationLogsDir = path.join(tempDirPath, 'testGenerationLogs')
+
+export async function getDirSize(dirPath: string, startTime: number, duration: number): Promise<number> {
     if (performance.now() - startTime > duration) {
         getLogger().warn('getDirSize: exceeds time limit')
         return 0
     }
-    const files = await fsCommon.readdir(dirPath)
-    const fileSizes = files.map(async file => {
+    const files = await fs.readdir(dirPath)
+    const fileSizes = files.map(async (file) => {
         const [fileName, type] = file
         const filePath = path.join(dirPath, fileName)
 
@@ -38,11 +36,11 @@ export async function getDirSize(
             return 0
         }
         if (type === vscode.FileType.Directory) {
-            return getDirSize(filePath, startTime, duration, fileExt)
+            return getDirSize(filePath, startTime, duration)
         }
-        if (type === vscode.FileType.File && fileName.endsWith(fileExt)) {
+        if (type === vscode.FileType.File) {
             // TODO: This is SLOW on Cloud9.
-            const stat = await fsCommon.stat(filePath)
+            const stat = await fs.stat(filePath)
             return stat.size
         }
 
@@ -53,7 +51,7 @@ export async function getDirSize(
 
 async function downloadsDir(): Promise<string> {
     const downloadPath = path.join(os.homedir(), 'Downloads')
-    if (await fsCommon.existsDir(downloadPath)) {
+    if (await fs.existsDir(downloadPath)) {
         return downloadPath
     } else {
         return os.tmpdir()
@@ -61,14 +59,14 @@ async function downloadsDir(): Promise<string> {
 }
 
 /**
- * @deprecated use {@link fsCommon} exist methods instead.
+ * @deprecated use {@link fs} exist methods instead.
  * Checks if file or directory `p` exists.
  *
  * TODO: optionally check read/write permissions and return a granular status.
  */
 export async function fileExists(p: string): Promise<boolean> {
     try {
-        return fsCommon.exists(p)
+        return fs.exists(p)
     } catch (err) {
         return false
     }
@@ -77,15 +75,10 @@ export async function fileExists(p: string): Promise<boolean> {
 }
 
 /**
- * @description Wraps readFileAsync and resolves the Buffer to a string for convenience
- *
- * @param filePath filename to read
- * @param encoding Optional - file encoding
- *
- * @returns the contents of the file as a string
+ * @deprecated use {@link fs} exist methods instead.
  */
 export async function readFileAsString(pathLike: string): Promise<string> {
-    return fsCommon.readFileAsString(pathLike)
+    return fs.readFileText(pathLike)
 }
 
 /**
@@ -99,7 +92,7 @@ export async function tryRemoveFolder(folder?: string): Promise<boolean> {
             getLogger().warn('tryRemoveFolder: no folder given')
             return false
         }
-        await fsCommon.delete(folder)
+        await fs.delete(folder, { recursive: true, force: true })
     } catch (err) {
         getLogger().warn('tryRemoveFolder: failed to delete directory "%s": %O', folder, err as Error)
         return false
@@ -107,6 +100,7 @@ export async function tryRemoveFolder(folder?: string): Promise<boolean> {
     return true
 }
 
+/** Note: In tests use `createTestWorkspaceFolder` instead. */
 export const makeTemporaryToolkitFolder = async (...relativePathParts: string[]) => {
     if (relativePathParts.length === 0) {
         relativePathParts.push('vsctk')
@@ -117,7 +111,7 @@ export const makeTemporaryToolkitFolder = async (...relativePathParts: string[])
         relativePathParts[relativePathParts.length - 1] + crypto.randomBytes(4).toString('hex')
 
     const tmpPath = path.join(tempDirPath, ...relativePathParts)
-    await fsCommon.mkdir(tmpPath)
+    await fs.mkdir(tmpPath)
     return tmpPath
 }
 
@@ -205,14 +199,14 @@ export async function getNonexistentFilename(
     if (!name) {
         throw new Error(`name is empty`)
     }
-    if (!(await fsCommon.existsDir(dir))) {
+    if (!(await fs.existsDir(dir))) {
         throw new Error(`directory does not exist: ${dir}`)
     }
     for (let i = 0; true; i++) {
         const filename =
             i === 0 ? `${name}${suffix}` : `${name}-${i < max ? i : crypto.randomBytes(4).toString('hex')}${suffix}`
         const fullpath = path.join(dir, filename)
-        if (!(await fsCommon.exists(fullpath)) || i >= max + 99) {
+        if (!(await fs.exists(fullpath)) || i >= max + 99) {
             return filename
         }
     }
@@ -232,39 +226,10 @@ export async function hasFileWithSuffix(dir: string, suffix: string, exclude?: v
 }
 
 /**
- * TEMPORARY SHIM for vscode.workspace.findFiles() on Cloud9.
- *
- * @param dir Directory to search
- * @param fileName Name of file to locate
- * @returns  List of one or zero Uris (for compat with vscode.workspace.findFiles())
- */
-export async function cloud9Findfile(dir: string, fileName: string): Promise<vscode.Uri[]> {
-    getLogger().debug('cloud9Findfile: %s', dir)
-    const files = await fsCommon.readdir(dir)
-    const subDirs: vscode.Uri[] = []
-    for (const file of files) {
-        const [currentFileName] = file
-        const filePath = path.join(dir, currentFileName)
-        if (filePath === path.join(dir, fileName)) {
-            return [vscode.Uri.file(filePath)]
-        }
-        if (await fsCommon.existsDir(filePath)) {
-            subDirs.push(vscode.Uri.file(filePath))
-        }
-    }
-    for (const d of subDirs) {
-        const found = await cloud9Findfile(d.fsPath, fileName)
-        if (found.length > 0) {
-            return found
-        }
-    }
-    return []
-}
-/**
  * @returns  A string path to the last locally stored download location. If none, returns the users 'Downloads' directory path.
  */
 export async function getDefaultDownloadPath(): Promise<string> {
-    const lastUsedPath = globals.context.globalState.get('aws.downloadPath')
+    const lastUsedPath = globals.globalState.get('aws.downloadPath')
     if (lastUsedPath) {
         if (typeof lastUsedPath === 'string') {
             return lastUsedPath
@@ -276,12 +241,134 @@ export async function getDefaultDownloadPath(): Promise<string> {
 
 export async function setDefaultDownloadPath(downloadPath: string) {
     try {
-        if (await fsCommon.existsDir(downloadPath)) {
-            GlobalState.instance.tryUpdate('aws.downloadPath', downloadPath)
+        if (await fs.existsDir(downloadPath)) {
+            await globals.globalState.update('aws.downloadPath', downloadPath)
         } else {
-            GlobalState.instance.tryUpdate('aws.downloadPath', path.dirname(downloadPath))
+            await globals.globalState.update('aws.downloadPath', path.dirname(downloadPath))
         }
     } catch (err) {
-        getLogger().error('Error while setting "aws.downloadPath"', err as Error)
+        getLogger().error('Error while setting "aws.downloadPath": %O', err as Error)
+    }
+}
+
+const FileSystemStabilityExceptionId = 'FileSystemStabilityException'
+const FileSystemStabilityException = ToolkitError.named(FileSystemStabilityExceptionId)
+
+/**
+ * Run this function to validate common file system calls/flows, ensuring they work
+ * as expected.
+ *
+ * The intent of this function is to catch potential fs issues early,
+ * testing common cases of fs usage. We need this since each machine can behave
+ * differently depending on things like OS, permissions, disk speed, ...
+ *
+ * @throws a {@link FileSystemStabilityException} which wraps the underlying failed fs operation error.
+ */
+export async function throwOnUnstableFileSystem(tmpRoot: string = tempDirPath) {
+    const tmpFolder = path.join(tmpRoot, `validateStableFS-${crypto.randomBytes(4).toString('hex')}`)
+    const tmpFile = path.join(tmpFolder, 'file.txt')
+
+    try {
+        // test basic folder operations
+        await withFailCtx('mkdirInitial', () => fs.mkdir(tmpFolder))
+        // Verifies that we do not throw if the dir exists and we try to make it again
+        await withFailCtx('mkdirButAlreadyExists', () => fs.mkdir(tmpFolder))
+        // Test subfolder creation. Based on telemetry it looks like the vsc mkdir may be flaky
+        // when creating subfolders. Hopefully this gives us some useful information.
+        const subfolderRoot = path.join(tmpFolder, 'a')
+        const subfolderPath = path.join(subfolderRoot, 'b/c/d/e')
+        await withFailCtx('mkdirSubfolderNode', () => nodeFs.mkdir(subfolderPath, { recursive: true }))
+        await withFailCtx('rmdirInitialForNode', () => fs.delete(subfolderRoot, { recursive: true }))
+        await withFailCtx('mkdirSubfolderVsc', () => fs.mkdir(subfolderPath))
+        await withFailCtx('rmdirInitialForVsc', () => fs.delete(subfolderRoot, { recursive: true }))
+
+        // test basic file operations
+        await withFailCtx('mkdirForFileOpsTest', () => fs.mkdir(tmpFolder))
+        await withFailCtx('writeFile1', () => fs.writeFile(tmpFile, 'test1'))
+        await withFailCtx('readFile1', async () => {
+            const text = await fs.readFileText(tmpFile)
+            if (text !== 'test1') {
+                throw new Error(`Unexpected file contents: "${text}"`)
+            }
+        })
+        // overwrite the file content multiple times
+        await withFailCtx('writeFile2', () => fs.writeFile(tmpFile, 'test2'))
+        await withFailCtx('writeFile3', () => fs.writeFile(tmpFile, 'test3'))
+        await withFailCtx('writeFile4', () => fs.writeFile(tmpFile, 'test4'))
+        await withFailCtx('writeFile5', () => fs.writeFile(tmpFile, 'test5'))
+        await withFailCtx('readFile5', async () => {
+            const text = await fs.readFileText(tmpFile)
+            if (text !== 'test5') {
+                throw new Error(`Unexpected file contents after multiple writes: "${text}"`)
+            }
+        })
+        // write a large file, ensuring we are not near a space limit
+        await withFailCtx('writeFileLarge', () => fs.writeFile(tmpFile, 'a'.repeat(1000)))
+        // test concurrent reads on a file
+        await withFailCtx('writeFileConcurrencyTest', () => fs.writeFile(tmpFile, 'concurrencyTest'))
+        const result = await Promise.all([
+            withFailCtx('readFileConcurrent1', () => fs.readFileText(tmpFile)),
+            withFailCtx('readFileConcurrent2', () => fs.readFileText(tmpFile)),
+            withFailCtx('readFileConcurrent3', () => fs.readFileText(tmpFile)),
+            withFailCtx('readFileConcurrent4', () => fs.readFileText(tmpFile)),
+            withFailCtx('readFileConcurrent5', () => fs.readFileText(tmpFile)),
+        ])
+        if (result.some((text) => text !== 'concurrencyTest')) {
+            throw new Error(`Unexpected concurrent file reads: ${result}`)
+        }
+        // test deleting a file
+        await withFailCtx('deleteFileInitial', () => fs.delete(tmpFile))
+        await withFailCtx('writeFileAfterDelete', () => fs.writeFile(tmpFile, 'afterDelete'))
+        await withFailCtx('readNewFileAfterDelete', async () => {
+            const text = await fs.readFileText(tmpFile)
+            if (text !== 'afterDelete') {
+                throw new Error(`Unexpected file content after writing to deleted file: "${text}"`)
+            }
+        })
+        await withFailCtx('deleteFileFully', () => fs.delete(tmpFile))
+        await withFailCtx('notExistsFileAfterDelete', async () => {
+            const res = await fs.exists(tmpFile)
+            if (res) {
+                throw new Error(`Expected file to NOT exist: "${tmpFile}"`)
+            }
+        })
+
+        // test rename
+        await withFailCtx('writeFileForRename', () => fs.writeFile(tmpFile, 'TestingRename'))
+        const tmpFileRenamed = tmpFile + '.renamed'
+        await withFailCtx('renameFile', () => fs.rename(tmpFile, tmpFileRenamed))
+        await withFailCtx('existsRenamedFile', async () => {
+            const res = await fs.exists(tmpFileRenamed)
+            if (!res) {
+                throw new Error(`Expected RENAMED file to exist: "${tmpFileRenamed}"`)
+            }
+        })
+        await withFailCtx('writeToRenamedFile', async () => fs.writeFile(tmpFileRenamed, 'hello'))
+        await withFailCtx('readFromRenamedFile', async () => {
+            const res = await fs.readFileText(tmpFileRenamed)
+            if (res !== 'hello') {
+                throw new Error(`Expected RENAMED file to be writable: "${tmpFileRenamed}"`)
+            }
+        })
+        await withFailCtx('renameFileReset', () => fs.rename(tmpFileRenamed, tmpFile))
+        await withFailCtx('renameFileResetExists', async () => {
+            const res = await fs.exists(tmpFile)
+            if (!res) {
+                throw new Error(`Expected reverted renamed file to exist: "${tmpFile}"`)
+            }
+        })
+    } finally {
+        await fs.delete(tmpFolder, { recursive: true, force: true })
+    }
+
+    async function withFailCtx<T>(ctx: string, fn: () => Promise<T>): Promise<T> {
+        try {
+            return await fn()
+        } catch (e) {
+            if (!(e instanceof Error)) {
+                throw e
+            }
+            throw FileSystemStabilityException.chain(e, `context: "${ctx}"`, { code: FileSystemStabilityExceptionId })
+        }
     }
 }

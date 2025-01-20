@@ -6,7 +6,7 @@
 import * as vscode from 'vscode'
 import * as nls from 'vscode-nls'
 import * as localizedText from '../localizedText'
-import { getLogger, showLogOutputChannel } from '../../shared/logger'
+import { getLogger } from '../../shared/logger'
 import { ProgressEntry } from '../../shared/vscode/window'
 import { getIdeProperties, isCloud9 } from '../extensionUtilities'
 import { sleep } from './timeoutUtils'
@@ -15,6 +15,10 @@ import { addCodiconToString } from './textUtilities'
 import { getIcon, codicon } from '../icons'
 import globals from '../extensionGlobals'
 import { openUrl } from './vsCodeUtils'
+import { AmazonQPromptSettings, ToolkitPromptSettings } from '../../shared/settings'
+import { telemetry, ToolkitShowNotification } from '../telemetry/telemetry'
+import { vscodeComponent } from '../vscode/commands2'
+import { getTelemetryReasonDesc } from '../errors'
 
 export const messages = {
     editCredentials(icon: boolean) {
@@ -32,21 +36,31 @@ export function makeFailedWriteMessage(filename: string): string {
     return message
 }
 
-function showMessageWithItems(
-    message: string,
+export function showMessage(
     kind: 'info' | 'warn' | 'error' = 'error',
+    message: string,
     items: string[] = [],
-    useModal: boolean = false
+    options: vscode.MessageOptions & { telemetry?: boolean } = {},
+    metric: Partial<ToolkitShowNotification> = {}
 ): Thenable<string | undefined> {
-    switch (kind) {
-        case 'info':
-            return vscode.window.showInformationMessage(message, { modal: useModal }, ...items)
-        case 'warn':
-            return vscode.window.showWarningMessage(message, { modal: useModal }, ...items)
-        case 'error':
-        default:
-            return vscode.window.showErrorMessage(message, { modal: useModal }, ...items)
-    }
+    return telemetry.toolkit_showNotification.run(async (span) => {
+        span.record({
+            passive: true,
+            id: 'unknown',
+            component: 'editor',
+            ...metric,
+        })
+
+        switch (kind) {
+            case 'info':
+                return vscode.window.showInformationMessage(message, options, ...items)
+            case 'warn':
+                return vscode.window.showWarningMessage(message, options, ...items)
+            case 'error':
+            default:
+                return vscode.window.showErrorMessage(message, options, ...items)
+        }
+    })
 }
 
 /**
@@ -72,8 +86,17 @@ export async function showMessageWithUrl(
     const uri = typeof url === 'string' ? vscode.Uri.parse(url) : url
     const items = [...extraItems, urlItem]
 
-    const p = showMessageWithItems(message, kind, items, useModal)
-    return p.then<string | undefined>(selection => {
+    const p = showMessage(
+        kind,
+        message,
+        items,
+        { modal: useModal },
+        {
+            id: 'showMessageWithUrl',
+            reasonDesc: getTelemetryReasonDesc(message),
+        }
+    )
+    return p.then<string | undefined>((selection) => {
         if (selection === urlItem) {
             void openUrl(uri)
         }
@@ -99,10 +122,19 @@ export async function showViewLogsMessage(
     const logsItem = localize('AWS.generic.message.viewLogs', 'View Logs...')
     const items = [...extraItems, logsItem]
 
-    const p = showMessageWithItems(message, kind, items)
-    return p.then<string | undefined>(selection => {
+    const p = showMessage(
+        kind,
+        message,
+        items,
+        {},
+        {
+            id: 'showViewLogsMessage',
+            reasonDesc: getTelemetryReasonDesc(message),
+        }
+    )
+    return p.then<string | undefined>((selection) => {
         if (selection === logsItem) {
-            showLogOutputChannel()
+            globals.logOutputChannel.show(true)
         }
         return selection
     })
@@ -137,6 +169,54 @@ export async function showConfirmationMessage({
         const selection = await vscode.window.showWarningMessage(prompt, { modal: true }, confirmItem, cancelItem)
         return selection?.title === confirmItem.title
     }
+}
+
+/**
+ * Shows a prompt for the user to reauthenticate
+ *
+ * @param message the line informing the user that they need to reauthenticate
+ * @param connect the text to display on the "connect" button
+ * @param suppressId the ID of the prompt in
+ * @param reauthFunc the function called if the "connect" button is clicked
+ */
+export async function showReauthenticateMessage({
+    message,
+    connect,
+    suppressId,
+    settings,
+    reauthFunc,
+    source = vscodeComponent,
+}: {
+    message: string
+    connect: string
+    suppressId: string // Parameters<PromptSettings['isPromptEnabled']>[0]
+    settings: AmazonQPromptSettings | ToolkitPromptSettings
+    reauthFunc: () => Promise<void>
+    source?: string
+}) {
+    const shouldShow = settings.isPromptEnabled(suppressId as any)
+    if (!shouldShow) {
+        return
+    }
+
+    await telemetry.toolkit_showNotification.run(async () => {
+        telemetry.record({ id: suppressId, source })
+        await vscode.window.showInformationMessage(message, connect, localizedText.dontShow).then(async (resp) => {
+            await telemetry.toolkit_invokeAction.run(async () => {
+                telemetry.record({ id: suppressId, source })
+
+                if (resp === connect) {
+                    telemetry.record({ action: 'connect' })
+                    await reauthFunc()
+                } else if (resp === localizedText.dontShow) {
+                    telemetry.record({ action: 'suppress' })
+                    await settings.disablePrompt(suppressId as any)
+                } else {
+                    telemetry.record({ action: 'dismiss' })
+                }
+            })
+        })
+    })
 }
 
 /**
@@ -190,7 +270,8 @@ async function showProgressWithTimeout(
                         return new Promise(timeout.onCompletion)
                     })
                 } catch (e) {
-                    getLogger().error('report(): progressPromise failed', e)
+                    const err = e as Error
+                    getLogger().error('report(): progressPromise failed: %s: %s', err.name, err.message)
                     reject(e)
                 }
             }, showAfterMs)
@@ -312,17 +393,14 @@ export async function copyToClipboard(data: string, label?: string): Promise<voi
     getLogger().verbose('copied %s to clipboard: %O', label ?? '', data)
 }
 
-export async function showOnce<T>(
-    key: string,
-    fn: () => Promise<T>,
-    memento = globals.context.globalState
-): Promise<T | undefined> {
-    if (memento.get(key)) {
+/** TODO: eliminate this, callers should use `PromptSettings` instead. */
+export async function showOnce<T>(key: 'sam.sync.updateMessage', fn: () => Promise<T>): Promise<T | undefined> {
+    if (globals.globalState.tryGet(key, Boolean, false)) {
         return
     }
 
     const result = fn()
-    await memento.update(key, true)
+    await globals.globalState.update(key, true)
 
     return result
 }

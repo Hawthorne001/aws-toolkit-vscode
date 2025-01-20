@@ -4,24 +4,28 @@
  */
 
 import * as vscode from 'vscode'
-import { AwsContext } from '../shared/awsContext'
 import { Auth } from './auth'
 import { LoginManager } from './deprecated/loginManager'
 import { fromString } from './providers/credentials'
-import { placeholder } from '../shared/vscode/commands2'
 import { getLogger } from '../shared/logger'
-import { ExtensionUse } from './utils'
-import { isCloud9 } from '../shared/extensionUtilities'
-import { isInDevEnv } from '../codecatalyst/utils'
-import { showManageConnections } from './ui/vue/show'
-import { isWeb } from '../common/webUtils'
+import { ExtensionUse, initializeCredentialsProviderManager } from './utils'
+import { isAmazonQ, isCloud9, isSageMaker } from '../shared/extensionUtilities'
+import { isInDevEnv } from '../shared/vscode/env'
+import { isWeb } from '../shared/extensionGlobals'
 
-export async function initialize(
-    extensionContext: vscode.ExtensionContext,
-    awsContext: AwsContext,
-    loginManager: LoginManager
-): Promise<void> {
-    Auth.instance.onDidChangeActiveConnection(async conn => {
+interface SagemakerCookie {
+    authMode?: 'Sso' | 'Iam'
+}
+
+export async function initialize(loginManager: LoginManager): Promise<void> {
+    if (isAmazonQ() && isSageMaker()) {
+        // The command `sagemaker.parseCookies` is registered in VS Code Sagemaker environment.
+        const result = (await vscode.commands.executeCommand('sagemaker.parseCookies')) as SagemakerCookie
+        if (result.authMode !== 'Sso') {
+            initializeCredentialsProviderManager()
+        }
+    }
+    Auth.instance.onDidChangeActiveConnection(async (conn) => {
         // This logic needs to be moved to `Auth.useConnection` to correctly record `passive`
         if (conn?.type === 'iam' && conn.state === 'valid') {
             await loginManager.login({ passive: true, providerId: fromString(conn.id) })
@@ -29,8 +33,6 @@ export async function initialize(
             await loginManager.logout()
         }
     })
-
-    extensionContext.subscriptions.push(showManageConnections.register(extensionContext))
 
     await showManageConnectionsOnStartup()
 }
@@ -55,7 +57,4 @@ async function showManageConnectionsOnStartup() {
         getLogger().debug(`firstStartup: ${reason}. Skipped showing Add Connections page.`)
         return
     }
-
-    // Show connection management to user
-    await showManageConnections.execute(placeholder, 'firstStartup')
 }

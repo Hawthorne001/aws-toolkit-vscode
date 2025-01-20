@@ -14,7 +14,7 @@ import * as localizedText from './localizedText'
 import { RegionProvider } from './regions/regionProvider'
 import { getIdeProperties } from './extensionUtilities'
 import { credentialHelpUrl } from './constants'
-import { PromptSettings } from './settings'
+import { ToolkitPromptSettings } from './settings'
 import { isNonNullable } from './utilities/tsUtils'
 import { CreateProfileWizard } from '../auth/wizards/createProfile'
 import { staticCredentialsTemplate } from '../auth/wizards/templates'
@@ -32,7 +32,10 @@ import { openUrl } from './utilities/vsCodeUtils'
 export class AwsContextCommands {
     private readonly _regionProvider: RegionProvider
 
-    public constructor(regionProvider: RegionProvider, private readonly auth: Auth) {
+    public constructor(
+        regionProvider: RegionProvider,
+        private readonly auth: Auth
+    ) {
         this._regionProvider = regionProvider
     }
 
@@ -62,7 +65,7 @@ export class AwsContextCommands {
         await this.editCredentials()
         if (
             credentialsFiles.length === 0 &&
-            (await PromptSettings.instance.isPromptEnabled('createCredentialsProfile')) &&
+            ToolkitPromptSettings.instance.isPromptEnabled('createCredentialsProfile') &&
             (await this.promptCredentialsSetup())
         ) {
             await this.onCommandCreateCredentialsProfile()
@@ -101,8 +104,8 @@ export class AwsContextCommands {
             return false // User canceled.
         }
 
-        const selected = result.map(res => res.detail).filter(isNonNullable)
-        if (selected.length !== currentRegions.size || selected.some(r => !currentRegions.has(r))) {
+        const selected = result.map((res) => res.detail).filter(isNonNullable)
+        if (selected.length !== currentRegions.size || selected.some((r) => !currentRegions.has(r))) {
             await this._regionProvider.updateExplorerRegions(selected)
             await vscode.commands.executeCommand('aws.refreshAwsExplorer', true)
         }
@@ -135,7 +138,7 @@ export class AwsContextCommands {
             credentialTypeId: resp.name,
         }
 
-        await vscode.window.showInformationMessage(
+        void vscode.window.showInformationMessage(
             localize(
                 'AWS.message.prompt.credentials.definition.done',
                 'Created {0} credentials profile: {1}',
@@ -164,7 +167,7 @@ export class AwsContextCommands {
         if (userResponse === localizedText.yes) {
             return true
         } else if (userResponse === localizedText.no) {
-            await PromptSettings.instance.disablePrompt('createCredentialsProfile')
+            await ToolkitPromptSettings.instance.disablePrompt('createCredentialsProfile')
         } else if (userResponse === localizedText.help) {
             await openUrl(vscode.Uri.parse(credentialHelpUrl))
             return await this.promptCredentialsSetup()

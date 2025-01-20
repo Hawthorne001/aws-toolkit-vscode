@@ -4,12 +4,22 @@
  */
 
 import * as vscode from 'vscode'
+import * as nls from 'vscode-nls'
 import { getTabSizeSetting } from '../shared/utilities/editorUtilities'
 import { KeyStrokeHandler } from './service/keyStrokeHandler'
 import * as EditorContext from './util/editorContext'
 import * as CodeWhispererConstants from './models/constants'
 import { getCompletionItems } from './service/completionProvider'
-import { vsCodeState, ConfigurationEntry, CodeSuggestionsState } from './models/model'
+import {
+    vsCodeState,
+    ConfigurationEntry,
+    CodeSuggestionsState,
+    CodeScansState,
+    SecurityTreeViewFilterState,
+    AggregatedCodeScanIssue,
+    CodeScanIssue,
+    CodeIssueGroupingStrategyState,
+} from './models/model'
 import { invokeRecommendation } from './commands/invokeRecommendation'
 import { acceptSuggestion } from './commands/onInlineAcceptance'
 import { resetIntelliSenseState } from './util/globalStateUtil'
@@ -38,17 +48,33 @@ import {
     connectWithCustomization,
     applySecurityFix,
     signoutCodeWhisperer,
-    showManageCwConnections,
-    fetchFeatureConfigsCmd,
+    toggleCodeScans,
+    registerToolkitApiCallback,
+    showFileScan,
+    clearFilters,
+    generateFix,
+    explainIssue,
+    ignoreIssue,
+    rejectFix,
+    showSecurityIssueFilters,
+    regenerateFix,
+    ignoreAllIssues,
+    focusIssue,
+    showExploreAgentsView,
+    showCodeIssueGroupingQuickPick,
 } from './commands/basicCommands'
 import { sleep } from '../shared/utilities/timeoutUtils'
 import { ReferenceLogViewProvider } from './service/referenceLogViewProvider'
 import { ReferenceHoverProvider } from './service/referenceHoverProvider'
 import { ReferenceInlineProvider } from './service/referenceInlineProvider'
-import { SecurityPanelViewProvider } from './views/securityPanelViewProvider'
-import { disposeSecurityDiagnostic } from './service/diagnosticsProvider'
+import {
+    disposeSecurityDiagnostic,
+    securityScanRender,
+    updateSecurityDiagnosticCollection,
+} from './service/diagnosticsProvider'
+import { SecurityPanelViewProvider, openEditorAtRange } from './views/securityPanelViewProvider'
 import { RecommendationHandler } from './service/recommendationHandler'
-import { Commands, registerCommandsWithVSCode } from '../shared/vscode/commands2'
+import { Commands, registerCommandErrorHandler, registerDeclaredCommands } from '../shared/vscode/commands2'
 import { InlineCompletionService, refreshStatusBar } from './service/inlineCompletionService'
 import { isInlineCompletionEnabled } from './util/commonUtil'
 import { CodeWhispererCodeCoverageTracker } from './tracker/codewhispererCodeCoverageTracker'
@@ -63,12 +89,30 @@ import { SecurityIssueCodeActionProvider } from './service/securityIssueCodeActi
 import { listCodeWhispererCommands } from './ui/statusBarMenu'
 import { updateUserProxyUrl } from './client/agent'
 import { Container } from './service/serviceContainer'
-const performance = globalThis.performance ?? require('perf_hooks').performance
+import { debounceStartSecurityScan } from './commands/startSecurityScan'
+import { securityScanLanguageContext } from './util/securityScanLanguageContext'
+import { registerWebviewErrorHandler } from '../webviews/server'
+import { logAndShowError, logAndShowWebviewError } from '../shared/utilities/logAndShowUtils'
+import { openSettings } from '../shared/settings'
+import { telemetry } from '../shared/telemetry'
+import { FeatureConfigProvider } from '../shared/featureConfig'
+import { SecurityIssueProvider } from './service/securityIssueProvider'
+import { SecurityIssueTreeViewProvider } from './service/securityIssueTreeViewProvider'
+import { setContext } from '../shared/vscode/setContext'
+import { syncSecurityIssueWebview } from './views/securityIssue/securityIssueWebview'
+import { detectCommentAboveLine } from '../shared/utilities/commentUtils'
+import { UserWrittenCodeTracker } from './tracker/userWrittenCodeTracker'
+
+let localize: nls.LocalizeFunc
 
 export async function activate(context: ExtContext): Promise<void> {
+    localize = nls.loadMessageBundle()
     const codewhispererSettings = CodeWhispererSettings.instance
+
     // initialize AuthUtil earlier to make sure it can listen to connection change events.
     const auth = AuthUtil.instance
+    auth.initCodeWhispererHooks()
+
     /**
      * Enable essential intellisense default settings for AWS C9 IDE
      */
@@ -77,8 +121,9 @@ export async function activate(context: ExtContext): Promise<void> {
         await enableDefaultConfigCloud9()
     }
 
-    registerCommandsWithVSCode(
-        context.extensionContext,
+    // TODO: is this indirection useful?
+    registerDeclaredCommands(
+        context.extensionContext.subscriptions,
         CodeWhispererCommandDeclarations.instance,
         new CodeWhispererCommandBackend(context.extensionContext)
     )
@@ -88,6 +133,17 @@ export async function activate(context: ExtContext): Promise<void> {
      */
     const securityPanelViewProvider = new SecurityPanelViewProvider(context.extensionContext)
     activateSecurityScan()
+
+    // TODO: this is already done in packages/core/src/extensionCommon.ts, why doesn't amazonq use that?
+    registerCommandErrorHandler((info, error) => {
+        const defaultMessage = localize('AWS.generic.message.error', 'Failed to run command: {0}', info.id)
+        void logAndShowError(localize, error, info.id, defaultMessage)
+    })
+
+    // TODO: this is already done in packages/core/src/extensionCommon.ts, why doesn't amazonq use that?
+    registerWebviewErrorHandler((error: unknown, webviewId: string, command: string) => {
+        return logAndShowWebviewError(localize, error, webviewId, command)
+    })
 
     /**
      * Service control
@@ -100,19 +156,18 @@ export async function activate(context: ExtContext): Promise<void> {
     ImportAdderProvider.instance
 
     context.extensionContext.subscriptions.push(
+        // register toolkit api callback
+        registerToolkitApiCallback.register(),
         signoutCodeWhisperer.register(auth),
-        showManageCwConnections.register(),
         /**
          * Configuration change
          */
-        vscode.workspace.onDidChangeConfiguration(async configurationChangeEvent => {
+        vscode.workspace.onDidChangeConfiguration(async (configurationChangeEvent) => {
             if (configurationChangeEvent.affectsConfiguration('editor.tabSize')) {
                 EditorContext.updateTabSize(getTabSizeSetting())
             }
 
-            if (
-                configurationChangeEvent.affectsConfiguration('aws.codeWhisperer.includeSuggestionsWithCodeReferences')
-            ) {
+            if (configurationChangeEvent.affectsConfiguration('amazonQ.showInlineCodeSuggestionsWithCodeReferences')) {
                 ReferenceLogViewProvider.instance.update()
                 if (auth.isEnterpriseSsoInUse()) {
                     await vscode.window
@@ -120,7 +175,7 @@ export async function activate(context: ExtContext): Promise<void> {
                             CodeWhispererConstants.ssoConfigAlertMessage,
                             CodeWhispererConstants.settingsLearnMore
                         )
-                        .then(async resp => {
+                        .then(async (resp) => {
                             if (resp === CodeWhispererConstants.settingsLearnMore) {
                                 void openUrl(vscode.Uri.parse(CodeWhispererConstants.learnMoreUri))
                             }
@@ -128,14 +183,14 @@ export async function activate(context: ExtContext): Promise<void> {
                 }
             }
 
-            if (configurationChangeEvent.affectsConfiguration('aws.codeWhisperer.shareCodeWhispererContentWithAWS')) {
+            if (configurationChangeEvent.affectsConfiguration('amazonQ.shareContentWithAWS')) {
                 if (auth.isEnterpriseSsoInUse()) {
                     await vscode.window
                         .showInformationMessage(
                             CodeWhispererConstants.ssoConfigAlertMessageShareData,
                             CodeWhispererConstants.settingsLearnMore
                         )
-                        .then(async resp => {
+                        .then(async (resp) => {
                             if (resp === CodeWhispererConstants.settingsLearnMore) {
                                 void openUrl(vscode.Uri.parse(CodeWhispererConstants.learnMoreUri))
                             }
@@ -149,7 +204,7 @@ export async function activate(context: ExtContext): Promise<void> {
                         CodeWhispererConstants.reloadWindowPrompt,
                         CodeWhispererConstants.reloadWindow
                     )
-                    .then(selected => {
+                    .then((selected) => {
                         if (selected === CodeWhispererConstants.reloadWindow) {
                             void vscode.commands.executeCommand('workbench.action.reloadWindow')
                         }
@@ -159,21 +214,30 @@ export async function activate(context: ExtContext): Promise<void> {
             if (configurationChangeEvent.affectsConfiguration('http.proxy')) {
                 updateUserProxyUrl()
             }
+
+            if (configurationChangeEvent.affectsConfiguration('amazonQ.ignoredSecurityIssues')) {
+                const ignoredIssues = CodeWhispererSettings.instance.getIgnoredSecurityIssues()
+                toggleIssuesVisibility((issue) => !ignoredIssues.includes(issue.title))
+            }
         }),
         /**
          * Open Configuration
          */
-        Commands.register('aws.codeWhisperer.configure', async id => {
+        Commands.register('aws.amazonq.configure', async (id) => {
             if (id === 'codewhisperer') {
                 await vscode.commands.executeCommand(
                     'workbench.action.openSettings',
-                    `@id:aws.codeWhisperer.includeSuggestionsWithCodeReferences`
+                    `@id:amazonQ.showInlineCodeSuggestionsWithCodeReferences`
                 )
             } else {
-                await vscode.commands.executeCommand('workbench.action.openSettings', `aws.codeWhisperer`)
+                await openSettings('amazonQ')
             }
         }),
-        Commands.register('aws.codewhisperer.refreshAnnotation', async (forceProceed: boolean = false) => {
+        Commands.register('aws.amazonq.refreshAnnotation', async (forceProceed: boolean) => {
+            telemetry.record({
+                traceId: TelemetryHelper.instance.traceId,
+            })
+
             const editor = vscode.window.activeTextEditor
             if (editor) {
                 if (forceProceed) {
@@ -185,14 +249,16 @@ export async function activate(context: ExtContext): Promise<void> {
         }),
         // show introduction
         showIntroduction.register(),
-        // direct CodeWhisperer connection setup with customization
-        connectWithCustomization.register(),
         // toggle code suggestions
         toggleCodeSuggestions.register(CodeSuggestionsState.instance),
+        // toggle code scans
+        toggleCodeScans.register(CodeScansState.instance),
         // enable code suggestions
         enableCodeSuggestions.register(context),
-        // code scan
+        // project scan
         showSecurityScan.register(context, securityPanelViewProvider, client),
+        // on demand file scan
+        showFileScan.register(context, securityPanelViewProvider, client),
         // show security issue webview panel
         openSecurityIssuePanel.register(context),
         // sign in with sso or AWS ID
@@ -207,17 +273,53 @@ export async function activate(context: ExtContext): Promise<void> {
         updateReferenceLog.register(),
         // refresh codewhisperer status bar
         refreshStatusBar.register(),
+        // generate code fix
+        generateFix.register(client, context),
+        // regenerate code fix
+        regenerateFix.register(),
         // apply suggested fix
         applySecurityFix.register(),
+        // reject suggested fix
+        rejectFix.register(context.extensionContext),
+        // ignore issues by title
+        ignoreAllIssues.register(),
+        // ignore single issue
+        ignoreIssue.register(),
+        // explain issue
+        explainIssue.register(),
         // quick pick with codewhisperer options
         listCodeWhispererCommands.register(),
+        // quick pick with security issues tree filters
+        showSecurityIssueFilters.register(),
+        // quick pick code issue grouping strategy
+        showCodeIssueGroupingQuickPick.register(),
+        // reset security issue filters
+        clearFilters.register(),
+        // handle security issues tree item clicked
+        focusIssue.register(),
+        // refresh the treeview on every change
+        SecurityTreeViewFilterState.instance.onDidChangeState((e) => {
+            SecurityIssueTreeViewProvider.instance.refresh()
+        }),
+        // refresh treeview when grouping strategy changes
+        CodeIssueGroupingStrategyState.instance.onDidChangeState((e) => {
+            SecurityIssueTreeViewProvider.instance.refresh()
+        }),
+        // show a no match state
+        SecurityIssueTreeViewProvider.instance.onDidChangeTreeData((e) => {
+            const noMatches =
+                Array.isArray(e) &&
+                e.length === 0 &&
+                SecurityIssueProvider.instance.issues.some((group) => group.issues.some((issue) => issue.visible))
+            void setContext('aws.amazonq.security.noMatches', noMatches)
+        }),
         // manual trigger
-        Commands.register({ id: 'aws.codeWhisperer', autoconnect: true }, async () => {
+        Commands.register({ id: 'aws.amazonq.invokeInlineCompletion', autoconnect: true }, async () => {
             invokeRecommendation(
                 vscode.window.activeTextEditor as vscode.TextEditor,
                 client,
                 await getConfigEntry()
-            ).catch(e => {
+            ).catch((e) => {
                 getLogger().error('invokeRecommendation failed: %s', (e as Error).message)
             })
         }),
@@ -225,14 +327,16 @@ export async function activate(context: ExtContext): Promise<void> {
         selectCustomizationPrompt.register(),
         // notify new customizations
         notifyNewCustomizationsCmd.register(),
-        // fetch feature configs
-        fetchFeatureConfigsCmd.register(),
         /**
          * On recommendation acceptance
          */
         acceptSuggestion.register(context),
+
+        // direct CodeWhisperer connection setup with customization
+        connectWithCustomization.register(),
+
         // on text document close.
-        vscode.workspace.onDidCloseTextDocument(e => {
+        vscode.workspace.onDidCloseTextDocument((e) => {
             if (isInlineCompletionEnabled() && e.uri.fsPath !== InlineCompletionService.instance.filePath()) {
                 return
             }
@@ -245,6 +349,7 @@ export async function activate(context: ExtContext): Promise<void> {
         ),
         vscode.window.registerWebviewViewProvider(ReferenceLogViewProvider.viewType, ReferenceLogViewProvider.instance),
         showReferenceLog.register(),
+        showExploreAgentsView.register(),
         vscode.languages.registerCodeLensProvider(
             [...CodeWhispererConstants.platformLanguageIds],
             ReferenceInlineProvider.instance
@@ -254,24 +359,135 @@ export async function activate(context: ExtContext): Promise<void> {
             ImportAdderProvider.instance
         ),
         vscode.languages.registerHoverProvider(
-            [...CodeWhispererConstants.platformLanguageIds],
+            [...CodeWhispererConstants.securityScanLanguageIds],
             SecurityIssueHoverProvider.instance
         ),
         vscode.languages.registerCodeActionsProvider(
-            [...CodeWhispererConstants.platformLanguageIds],
+            [...CodeWhispererConstants.securityScanLanguageIds],
             SecurityIssueCodeActionProvider.instance
-        )
+        ),
+        vscode.commands.registerCommand('aws.amazonq.openEditorAtRange', openEditorAtRange)
     )
 
-    await auth.restore()
+    // run the auth startup code with context for telemetry
+    await telemetry.function_call.run(
+        async () => {
+            await auth.restore()
+            await auth.clearExtraConnections()
 
-    if (auth.isConnectionExpired()) {
-        auth.showReauthenticatePrompt().catch(e => {
-            getLogger().error('showReauthenticatePrompt failed: %s', (e as Error).message)
-        })
-    }
+            if (auth.isConnectionExpired()) {
+                auth.showReauthenticatePrompt().catch((e) => {
+                    const defaulMsg = localize('AWS.generic.message.error', 'Failed to reauth:')
+                    void logAndShowError(localize, e, 'showReauthenticatePrompt', defaulMsg)
+                })
+                if (auth.isEnterpriseSsoInUse()) {
+                    await auth.notifySessionConfiguration()
+                }
+            }
+        },
+        { emit: false, functionId: { name: 'activateCwCore' } }
+    )
+
     if (auth.isValidEnterpriseSsoInUse()) {
         await notifyNewCustomizations()
+    }
+    if (auth.isBuilderIdInUse()) {
+        await CodeScansState.instance.setScansEnabled(false)
+    }
+
+    /**
+     * CodeWhisperer auto scans
+     */
+    setSubscriptionsForAutoScans()
+
+    setSubscriptionsForCodeIssues()
+
+    function shouldRunAutoScan(editor: vscode.TextEditor | undefined, isScansEnabled?: boolean) {
+        return (
+            (isScansEnabled ?? CodeScansState.instance.isScansEnabled()) &&
+            !CodeScansState.instance.isMonthlyQuotaExceeded() &&
+            auth.isConnectionValid() &&
+            !auth.isBuilderIdInUse() &&
+            editor &&
+            editor.document.uri.scheme === 'file' &&
+            securityScanLanguageContext.isLanguageSupported(editor.document.languageId)
+        )
+    }
+
+    function setSubscriptionsForAutoScans() {
+        // Initial scan when the editor opens for the first time
+        const editor = vscode.window.activeTextEditor
+        if (editor && shouldRunAutoScan(editor) && editor.document.getText().length > 0) {
+            void debounceStartSecurityScan(
+                securityPanelViewProvider,
+                editor,
+                client,
+                context.extensionContext,
+                CodeWhispererConstants.CodeAnalysisScope.FILE_AUTO,
+                false
+            )
+        }
+
+        context.extensionContext.subscriptions.push(
+            // Trigger scan if focus switches to a different file
+            vscode.window.onDidChangeActiveTextEditor((editor) => {
+                const codewhispererDiagnostics = editor
+                    ? securityScanRender.securityDiagnosticCollection
+                          ?.get(editor.document.uri)
+                          ?.filter(({ source }) => source === CodeWhispererConstants.codewhispererDiagnosticSourceLabel)
+                    : undefined
+
+                if (
+                    editor &&
+                    shouldRunAutoScan(editor) &&
+                    editor.document.getText().length > 0 &&
+                    (!codewhispererDiagnostics || codewhispererDiagnostics?.length === 0)
+                ) {
+                    void debounceStartSecurityScan(
+                        securityPanelViewProvider,
+                        editor,
+                        client,
+                        context.extensionContext,
+                        CodeWhispererConstants.CodeAnalysisScope.FILE_AUTO,
+                        false
+                    )
+                }
+            }),
+            // Trigger scan if the file contents change
+            vscode.workspace.onDidChangeTextDocument(async (event) => {
+                const editor = vscode.window.activeTextEditor
+                if (
+                    editor &&
+                    shouldRunAutoScan(editor) &&
+                    event.document === editor.document &&
+                    event.contentChanges.length > 0
+                ) {
+                    void debounceStartSecurityScan(
+                        securityPanelViewProvider,
+                        editor,
+                        client,
+                        context.extensionContext,
+                        CodeWhispererConstants.CodeAnalysisScope.FILE_AUTO,
+                        false
+                    )
+                }
+            })
+        )
+
+        // Trigger scan if the toggle has just been enabled
+        CodeScansState.instance.onDidChangeState((isScansEnabled) => {
+            const editor = vscode.window.activeTextEditor
+            if (editor && shouldRunAutoScan(editor, isScansEnabled) && editor.document.getText().length > 0) {
+                void debounceStartSecurityScan(
+                    securityPanelViewProvider,
+                    editor,
+                    client,
+                    context.extensionContext,
+                    CodeWhispererConstants.CodeAnalysisScope.FILE_AUTO,
+                    false
+                )
+            }
+        })
     }
 
     function activateSecurityScan() {
@@ -280,7 +496,7 @@ export async function activate(context: ExtContext): Promise<void> {
         )
 
         context.extensionContext.subscriptions.push(
-            vscode.window.onDidChangeActiveTextEditor(editor => {
+            vscode.window.onDidChangeActiveTextEditor((editor) => {
                 if (isCloud9()) {
                     if (editor) {
                         securityPanelViewProvider.setDecoration(editor, editor.document.uri)
@@ -318,20 +534,21 @@ export async function activate(context: ExtContext): Promise<void> {
     }
 
     async function setSubscriptionsforInlineCompletion() {
+        RecommendationHandler.instance.subscribeSuggestionCommands()
         /**
          * Automated trigger
          */
         context.extensionContext.subscriptions.push(
-            vscode.window.onDidChangeActiveTextEditor(async editor => {
+            vscode.window.onDidChangeActiveTextEditor(async (editor) => {
                 await RecommendationHandler.instance.onEditorChange()
             }),
-            vscode.window.onDidChangeWindowState(async e => {
+            vscode.window.onDidChangeWindowState(async (e) => {
                 await RecommendationHandler.instance.onFocusChange()
             }),
-            vscode.window.onDidChangeTextEditorSelection(async e => {
+            vscode.window.onDidChangeTextEditorSelection(async (e) => {
                 await RecommendationHandler.instance.onCursorChange(e)
             }),
-            vscode.workspace.onDidChangeTextDocument(async e => {
+            vscode.workspace.onDidChangeTextDocument(async (e) => {
                 const editor = vscode.window.activeTextEditor
                 if (!editor) {
                     return
@@ -339,20 +556,12 @@ export async function activate(context: ExtContext): Promise<void> {
                 if (e.document !== editor.document) {
                     return
                 }
-                if (!runtimeLanguageContext.isLanguageSupported(e.document.languageId)) {
+                if (!runtimeLanguageContext.isLanguageSupported(e.document)) {
                     return
                 }
 
-                /**
-                 * CodeWhisperer security panel dynamic handling
-                 */
-                disposeSecurityDiagnostic(e)
-
-                SecurityIssueHoverProvider.instance.handleDocumentChange(e)
-                SecurityIssueCodeActionProvider.instance.handleDocumentChange(e)
-
                 CodeWhispererCodeCoverageTracker.getTracker(e.document.languageId)?.countTotalTokens(e)
-
+                UserWrittenCodeTracker.instance.onTextDocumentChange(e)
                 /**
                  * Handle this keystroke event only when
                  * 1. It is not a backspace
@@ -402,7 +611,7 @@ export async function activate(context: ExtContext): Promise<void> {
             /**
              * Automated trigger
              */
-            vscode.workspace.onDidChangeTextDocument(async e => {
+            vscode.workspace.onDidChangeTextDocument(async (e) => {
                 const editor = vscode.window.activeTextEditor
                 if (!editor) {
                     return
@@ -410,7 +619,7 @@ export async function activate(context: ExtContext): Promise<void> {
                 if (e.document !== editor.document) {
                     return
                 }
-                if (!runtimeLanguageContext.isLanguageSupported(e.document.languageId)) {
+                if (!runtimeLanguageContext.isLanguageSupported(e.document)) {
                     return
                 }
                 /**
@@ -436,13 +645,13 @@ export async function activate(context: ExtContext): Promise<void> {
              * On intelliSense recommendation rejection, reset set intelli sense is active state
              * Maintaining this variable because VS Code does not expose official intelliSense isActive API
              */
-            vscode.window.onDidChangeVisibleTextEditors(async e => {
+            vscode.window.onDidChangeVisibleTextEditors(async (e) => {
                 resetIntelliSenseState(true, getAutoTriggerStatus(), RecommendationHandler.instance.isValidResponse())
             }),
-            vscode.window.onDidChangeActiveTextEditor(async e => {
+            vscode.window.onDidChangeActiveTextEditor(async (e) => {
                 resetIntelliSenseState(true, getAutoTriggerStatus(), RecommendationHandler.instance.isValidResponse())
             }),
-            vscode.window.onDidChangeTextEditorSelection(async e => {
+            vscode.window.onDidChangeTextEditorSelection(async (e) => {
                 if (e.kind === TextEditorSelectionChangeKind.Mouse) {
                     resetIntelliSenseState(
                         true,
@@ -451,13 +660,47 @@ export async function activate(context: ExtContext): Promise<void> {
                     )
                 }
             }),
-            vscode.workspace.onDidSaveTextDocument(async e => {
+            vscode.workspace.onDidSaveTextDocument(async (e) => {
                 resetIntelliSenseState(true, getAutoTriggerStatus(), RecommendationHandler.instance.isValidResponse())
             })
         )
     }
 
+    void FeatureConfigProvider.instance.fetchFeatureConfigs().catch((error) => {
+        getLogger().error('Failed to fetch feature configs - %s', error)
+    })
+
+    await Commands.tryExecute('aws.amazonq.refreshConnectionCallback')
     container.ready()
+
+    function setSubscriptionsForCodeIssues() {
+        context.extensionContext.subscriptions.push(
+            vscode.workspace.onDidChangeTextDocument(async (e) => {
+                if (e.document.uri.scheme !== 'file') {
+                    return
+                }
+                const diagnostics = securityScanRender.securityDiagnosticCollection?.get(e.document.uri)
+                if (!diagnostics || diagnostics.length === 0) {
+                    return
+                }
+                disposeSecurityDiagnostic(e)
+
+                SecurityIssueProvider.instance.handleDocumentChange(e)
+                SecurityIssueTreeViewProvider.instance.refresh()
+                await syncSecurityIssueWebview(context)
+
+                toggleIssuesVisibility((issue, filePath) =>
+                    filePath !== e.document.uri.fsPath
+                        ? issue.visible
+                        : !detectCommentAboveLine(
+                              e.document,
+                              issue.startLine,
+                              CodeWhispererConstants.amazonqIgnoreNextLine
+                          )
+                )
+            })
+        )
+    }
 }
 
 export async function shutdown() {
@@ -474,6 +717,19 @@ export async function enableDefaultConfigCloud9() {
         await editorSettings.update('acceptSuggestionOnEnter', 'on', vscode.ConfigurationTarget.Global)
         await editorSettings.update('snippetSuggestions', 'top', vscode.ConfigurationTarget.Global)
     } catch (error) {
-        getLogger().error('codewhisperer: Failed to update user settings', error)
+        getLogger().error('amazonq: Failed to update user settings %O', error)
     }
+}
+
+function toggleIssuesVisibility(visibleCondition: (issue: CodeScanIssue, filePath: string) => boolean) {
+    const updatedIssues: AggregatedCodeScanIssue[] = SecurityIssueProvider.instance.issues.map((group) => ({
+        ...group,
+        issues: group.issues.map((issue) => ({ ...issue, visible: visibleCondition(issue, group.filePath) })),
+    }))
+    securityScanRender.securityDiagnosticCollection?.clear()
+    for (const issue of updatedIssues) {
+        updateSecurityDiagnosticCollection(issue)
+    }
+    SecurityIssueProvider.instance.issues = updatedIssues
+    SecurityIssueTreeViewProvider.instance.refresh()
 }

@@ -23,7 +23,7 @@ If you are considering contributing, please consider whether your implementation
 library or in `packages/toolkit`. If your work could be re-used by other packages (e.g. auth mechanisms,
 utilities), then it may belong in the core library. If instead you are adding something toolkit specific
 (eg. an integration to a new AWS service in the Explorer Tree), consider putting it in `packages/toolkit`.
-To import from the core library, please export your desired code using `index.ts` files, and add an appropriate `exports` statement
+To import from the core library, please export your desired code using `index.ts` files and add an appropriate `exports` statement
 in `packages/core/package.json`.
 
 Unless otherwise stated, the documentation throughout this project is referring to the code and
@@ -35,29 +35,57 @@ Current quirks of the current monorepo status that should be resolved/evaluated 
 -   The [root package.json](../package.json) contains common dependencies for subprojects, and workspace
     entries for each of the subprojects.
     -   This package contains shortcuts to some of the `npm` scripts found in the subproject(s).
-    -   Other scripts, like `createRelease` and `newChange` run at the root level.
+    -   `createRelease` and `newChange` run at the subproject level only, e.g. from root level, try npm run createRelease -w packages/toolkit
     -   To run a script not present in the root `package.json`, use `npm run -w packages/toolkit <script>`
--   `coverage/`, `.test-reports/`, `node_modules/` are hoisted to the project root. As more subprojects are added,
-    we will need to evaluate how to merge and publish coverage reports.
+-   `coverage/`, `.test-reports/`, `node_modules/` are hoisted to the project root.
     -   `dist/` however remains at the subproject level, along with a local `node_modules/`. See [`npm workspaces`](https://docs.npmjs.com/cli/v8/using-npm/workspaces)
         for more info on how `node_modules/` hoisting works.
     -   Because of `node_modules/` hoisting, references to this folder in code access the root project modules folder. This may be
         an issue if more subprojects are added and the contents of the root and local modules folders differ.
 -   [`globalSetup.test.ts`](../packages/core/src/test/globalSetup.test.ts) should be configured to work as a library/run tests for all subprojects.
 -   Subproject `tsconfig.json`s should extend a root `tsconfig.packages.json`.
--   Linting tests should run at the root level, not subproject level.
 -   `packages/*/scripts/` should be generalized and moved to the root of the project as needed.
+-   Linting tests should run at the root level, not subproject level.
 -   LICENSE, README.md, and other non-code artifacts that must be packaged into the .vsix are currently
     being copied into the packaging subproject directory from the root project directory as part of the `copyFiles` task.
 -   Pre-release only publishes packages/toolkit extension directly. It should be extended to other added extensions. See [`release.yml`](../.github/workflows/release.yml)
 -   VSCode does not support inheriting/extending `.vscode/` settings: https://github.com/microsoft/vscode/issues/15909
 
-Additional quirks introduced by creating a core library from the original extension code:
+### Contributes and Settings
 
--   Tests are ran from `packages/core/`
--   Extension runs from `packages/toolkit`
--   Extension tests run from the core lib. Since some of the tests require an extension context/sandbox, we initiate a "fake" extension to run these tests. This is also why there are vscode extensionproperties in the package.json
--   Some of original extension code (that now lives in `packages/core`) depends on the package.json, specifically the contributes section. This section is very large AND needs to be present in both the core library and toolkit extension package.jsons. The core library code needs access to this section to create types, set up SAM debuggers, etc. The toolkit needs this section during packaging/debugging so that the extension can run in vscode. The short term solution was to creat a [build script](../packages/toolkit/scripts/build/handlePackageJson.ts) to copy necessary fields over to the toolkit extension during packaging and debugging.
+`packages/toolkit/` and `packages/amazonq` have independent extension packageJSON files. They do not rely on `packages/core/package.json`. However, to get typed icons in the core-lib we require a place to store the icon entries. This currently happens in `packages/core/package.json`. See [`icons.md`](./icons.md) for more information.
+
+If you are modifying or registering new debuggers in VS Code via the `debuggers` contribution point, you may need to regenerate the [definitions file](../packages/core/src/shared/sam/debugger/awsSamDebugConfiguration.gen.ts). After updating ['toolkit/package.json'](../packages/toolkit/package.json), run `npm run generateConfigurationAttributes -w packages/toolkit`
+
+## `web`, `node`, `common`, `shared` naming conventions
+
+This project can run in different environments, eg Web mode (in the browser with no compute backend), or in Node.js on your desktop (the most common way).
+A problem arises when we use code that is exclusive to one environment, an example being Node.js' Filesystem module which will fail in Web mode.
+
+To ensure developers use compatible code for their environment we have subfolders in each topic which contains environment specific code in a single place.
+
+Using this file tree as reference, here are the rules:
+
+```
+src/
+├── myTopic/
+│   ├── {file}.ts
+│   ├── node/
+│   │   └── {file}.ts
+│   └── web/
+│       └── {file}.ts
+└── shared/
+```
+
+-   `myTopic/` is the general name of the folder, eg `request` for http requests.
+-   `myTopic/{file}.ts` is for code that works in any environment, we refer to this as `"common"` code.
+-   `node/{file}.ts` is for code that works exclusively in Node.js.
+-   `web/{file}.ts` is for code that works exclusively in Web mode.
+-   `shared/` is for code that is intended to be reused, i.e general purpose utils.
+    -   Note environment specific code should be place in to a `web/` or `node/` subfolder.
+    -   If the code is not in a subfolder then it is considered `shared common` code.
+
+> IMPORTANT: The current codebase does not fully follow this convention yet, the transition is being done incrementally. Due to this, code that is `"common"` may not actually be common yet. If you run in to this, please move that code to the appropriate subfolder.
 
 ## Commands
 
@@ -246,8 +274,8 @@ Commands and events are defined on the backend via sub-classes of `VueWebview`. 
     ```ts
     client
         .foo()
-        .then(response => console.log(response))
-        .catch(err => console.log(err))
+        .then((response) => console.log(response))
+        .catch((err) => console.log(err))
     ```
 
     The backend protocol is allowed to throw errors. These result in rejected Promises on the frontend.
@@ -255,14 +283,71 @@ Commands and events are defined on the backend via sub-classes of `VueWebview`. 
 -   Registering for events:
 
     ```ts
-    client.onBar(num => console.log(num))
+    client.onBar((num) => console.log(num))
     ```
 
 -   Methods called `init` will only return data on the initial webview load:
 
     ```ts
-    client.init(data => (this.data = data ?? this.data))
+    client.init((data) => (this.data = data ?? this.data))
     ```
+
+## Webviews (non Vue)
+
+Some webviews (amazon q chat view, codewhisperer security panel) rely on the native vscode webview implementation using the `vscode.WebviewViewProvider` and the `vscode.window.registerWebviewViewProvider(viewType, panel)` extension APIs. They follow the standard structure given by the webview documentation: https://code.visualstudio.com/api/extension-guides/webview.
+
+### Importing css
+
+css imports for non vue webviews should be imported when generating the webview provider html, rather than loaded inside of the javascript otherwise you will get "Error: Cannot find module 'some/path/to/my.css'" when running the e2e tests:
+
+e.g. when creating the html do:
+
+```ts
+// foo.js
+export function foo() {
+    // some javascript actions
+}
+
+// webview.ts
+const myCSS = webviewView.webview.asWebviewUri(
+    vscode.Uri.joinPath(globals.context.extensionUri, 'resources', 'mycss.css')
+)
+
+webviewView.webview.html = `
+<html>
+    <head>
+        <link rel="stylesheet" href="${myCSS.toString()}">
+    </head>
+    <body>
+        <script src="./foo.js">
+            foo()
+        </script>
+    </body>
+</html>
+`
+```
+
+rather than:
+
+```ts
+// foo.js
+import 'resources/mycss.css'
+
+export function foo() {
+    // some javascript actions
+}
+
+// webview.ts
+webviewView.webview.html = `
+<html>
+    <body>
+        <script src="./foo.js">
+            foo()
+        </script>
+    </body>
+</html>
+`
+```
 
 ### Testing
 
@@ -359,7 +444,7 @@ await tester.result(items[0].data) // Execute the actions, asserting the final r
 
 Abstractly, a 'wizard' is a collection of discrete, linear steps (subroutines), where each step can potentially be dependent on prior steps, that results in some final state. Wizards are extremely common in top-level flows such as creating a new resource, deployments, or confirmation messages. For these kinds of flows, we have a shared `Wizard` class that handles the bulk of control flow and state management logic for us.
 
-### Creating a Wizard (Quick Picks)
+### 1. `Wizard` Class
 
 Create a new wizard by extending the base `Wizard` class, using the template type to specify the
 shape of the wizard state. All wizards have an internal `form` property that is used to assign
@@ -390,11 +475,46 @@ class ExampleWizard extends Wizard<ExampleState> {
             { label: '1', data: 1 },
             { label: '2', data: 2 },
         ]
-        this.form.bar.bindPrompter(state => createQuickPick(items, { title: `Select a number (${state.foo})` }), {
-            showWhen: state => state.foo?.length > 5,
+        this.form.bar.bindPrompter((state) => createQuickPick(items, { title: `Select a number (${state.foo})` }), {
+            showWhen: (state) => state.foo?.length > 5,
         })
     }
 }
+```
+
+### 2. `CompositeWizard` Class
+
+`CompositeWizard` extends `Wizard` to create and manage a collection of nested/child wizards.
+
+Extend this class to create a wizard that contains other wizards as part of a prompter flow.
+Use `this.createWizardPrompter()` to use a wizard as a prompter in the `CompositeWizard`.
+
+Example:
+
+```ts
+
+// Child wizard
+class ChildWizard extends Wizard<ChildWizardForm> {...}
+
+
+// Composite wizard
+interface SingleNestedWizardForm {
+    ...
+    singleNestedWizardNestedProp: string
+    ...
+}
+
+class SingleNestedWizard extends CompositeWizard<SingleNestedWizardForm> {
+    constructor() {
+        super()
+        ...
+        this.form.singleNestedWizardNestedProp.bindPrompter(() =>
+            this.createWizardPrompter<ChildWizard, ChildWizardForm>(ChildWizard)
+        )
+        ...
+    }
+}
+
 ```
 
 ### Executing
@@ -410,6 +530,8 @@ Note that all wizards can potentially return `undefined` if the workflow was can
 
 ### Testing
 
+#### Using `WizardTester`
+
 Use `createWizardTester` on an instance of a wizard. Tests can then be constructed by asserting both the user-defined and internal state. Using the above `ExampleWizard`:
 
 ```ts
@@ -418,4 +540,82 @@ tester.foo.assertShowFirst() // Fails if `foo` is not shown (or not shown first)
 tester.bar.assertDoesNotShow() // True since `foo` is not assigned an explicit value
 tester.foo.applyInput('Hello, world!') // Manipulate 'user' state
 tester.bar.assertShow() // True since 'foo' has a defined value
+```
+
+#### Using `PrompterTester`
+
+Use `PrompterTester` to simulate user behavior (click, input and selection) on prompters to test end-to-end flow of a wizard.
+
+Example:
+
+```ts
+// 1. Register PrompterTester handlers
+const prompterTester = PrompterTester.init()
+    .handleInputBox('Input Prompter title 1', (inputBox) => {
+        // Register Input Prompter handler
+        inputBox.acceptValue('my-source-bucket-name')
+    })
+    .handleQuickPick('Quick Pick Prompter title 2', (quickPick) => {
+        // Register Quick Pick Prompter handler
+
+        // Optional assertion can be added as part of the handler function
+        assert.strictEqual(quickPick.items.length, 2)
+        assert.strictEqual(quickPick.items[0].label, 'Specify required parameters and save as defaults')
+        assert.strictEqual(quickPick.items[1].label, 'Specify required parameters')
+        // Choose item
+        quickPick.acceptItem(quickPick.items[0])
+    })
+    .handleQuickPick(
+        'Quick Pick Prompter with various handler behavior title 3',
+        (() => {
+            // Register handler with dynamic behavior
+            const generator = (function* () {
+                // First call, choose '**'
+                yield async (picker: TestQuickPick) => {
+                    await picker.untilReady()
+                    assert.strictEqual(picker.items[1].label, '**')
+                    picker.acceptItem(picker.items[1])
+                }
+                // Second call, choose BACK button
+                yield async (picker: TestQuickPick) => {
+                    await picker.untilReady()
+                    picker.pressButton(vscode.QuickInputButtons.Back)
+                }
+                // Third and subsequent call
+                while (true) {
+                    yield async (picker: TestQuickPick) => {
+                        await picker.untilReady()
+                        picker.acceptItem(picker.items[1])
+                    }
+                }
+            })()
+
+            return (picker: TestQuickPick) => {
+                const next = generator.next().value
+                return next(picker)
+            }
+        })()
+    )
+    .build()
+
+// 2. Run your wizard class
+const result = await wizard.run()
+
+// 3. Assert your tests
+prompterTester.assertCallAll()
+prompterTester.assertCallOrder('Input Prompter title 1', 1)
+```
+
+## Module path debugging
+
+Node has an environment variable `NODE_DEBUG=module` that helps to debug module imports. This can be helpful on windows, which can load node modules into uppercase or lower case drive letters, depending on the drive letter of the parent module.
+
+You can enable this by adding `"NODE_DEBUG": "module"` into the env of your launch config that you are using.
+
+When enabled you can see the file that the import is looking for, the module load request, and the relative file requested.
+
+```
+MODULE 88184: looking for ["/aws-toolkit-vscode/packages/core/dist/src"]
+MODULE 88184: Module._load REQUEST ./codewhisperer/commands/basicCommands parent: /aws-toolkit-vscode/packages/core/dist/src/extension.js
+MODULE 88184: RELATIVE: requested: ./codewhisperer/commands/basicCommands from parent.id /aws-toolkit-vscode/packages/core/dist/src/extension.js
 ```

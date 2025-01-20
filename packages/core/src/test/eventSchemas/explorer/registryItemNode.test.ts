@@ -103,7 +103,7 @@ describe('DefaultRegistryNode', function () {
     it('Sorts Registries', async function () {
         const inputRegistryNames: string[] = ['zebra', 'Antelope', 'aardvark', 'elephant']
         const client = createSchemaClient({
-            registries: inputRegistryNames.map(name => ({ RegistryName: name })),
+            registries: inputRegistryNames.map((name) => ({ RegistryName: name })),
         })
 
         const schemasNode = new SchemasNode(client)
@@ -141,7 +141,7 @@ describe('DefaultRegistryNode', function () {
     })
 
     it('handles error', async function () {
-        //typo in the name of the method
+        // typo in the name of the method
         class ThrowErrorDefaultSchemaRegistrynNode extends SchemasNode {
             public constructor() {
                 super(createSchemaClient())

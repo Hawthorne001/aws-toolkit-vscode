@@ -9,11 +9,14 @@ import { distance } from 'fastest-levenshtein'
 import { AcceptedSuggestionEntry } from '../models/model'
 import { getLogger } from '../../shared/logger/logger'
 import { AmazonqModifyCode, telemetry } from '../../shared/telemetry/telemetry'
-import { CodeWhispererUserGroupSettings } from '../util/userGroupUtil'
 import { AuthUtil } from '../util/authUtil'
 import { InsertedCode } from '../../codewhispererChat/controllers/chat/model'
 import { codeWhispererClient } from '../client/codewhisperer'
 import { logSendTelemetryEventFailure } from '../../codewhispererChat/controllers/chat/telemetryHelper'
+import { Timeout } from '../../shared/utilities/timeoutUtils'
+import { getSelectedCustomization } from '../util/customizationUtil'
+import { isAwsError, undefinedIfEmpty } from '../../shared'
+import { getUnmodifiedAcceptedTokens } from '../util/commonUtil'
 
 /**
  * This singleton class is mainly used for calculating the percentage of user modification.
@@ -21,7 +24,7 @@ import { logSendTelemetryEventFailure } from '../../codewhispererChat/controller
  */
 export class CodeWhispererTracker {
     private _eventQueue: (AcceptedSuggestionEntry | InsertedCode)[]
-    private _timer?: NodeJS.Timer
+    private _timer?: Timeout
     private static instance: CodeWhispererTracker
 
     /**
@@ -48,7 +51,7 @@ export class CodeWhispererTracker {
         }
 
         if (this._eventQueue.length >= 0) {
-            this.startTimer().catch(e => {
+            this.startTimer().catch((e) => {
                 getLogger().error('startTimer failed: %s', (e as Error).message)
             })
         }
@@ -87,18 +90,20 @@ export class CodeWhispererTracker {
 
     public async emitTelemetryOnSuggestion(suggestion: AcceptedSuggestionEntry | InsertedCode) {
         let percentage = 1.0
+        let currString = ''
+        const customizationArn = undefinedIfEmpty(getSelectedCustomization().arn)
+
         try {
             if (suggestion.fileUrl?.scheme !== '') {
                 const document = await vscode.workspace.openTextDocument(suggestion.fileUrl)
                 if (document) {
-                    const currString = document.getText(
-                        new vscode.Range(suggestion.startPosition, suggestion.endPosition)
-                    )
+                    currString = document.getText(new vscode.Range(suggestion.startPosition, suggestion.endPosition))
                     percentage = this.checkDiff(currString, suggestion.originalString)
                 }
             }
         } catch (e) {
             getLogger().verbose(`Exception Thrown from CodeWhispererTracker: ${e}`)
+            return
         } finally {
             if ('conversationID' in suggestion) {
                 const event: AmazonqModifyCode = {
@@ -117,6 +122,7 @@ export class CodeWhispererTracker {
                                 conversationId: event.cwsprChatConversationId,
                                 messageId: event.cwsprChatMessageId,
                                 modificationPercentage: event.cwsprChatModificationPercentage,
+                                customizationArn: customizationArn,
                             },
                         },
                     })
@@ -132,11 +138,42 @@ export class CodeWhispererTracker {
                     codewhispererCompletionType: suggestion.completionType,
                     codewhispererLanguage: suggestion.language,
                     credentialStartUrl: AuthUtil.instance.startUrl,
-                    codewhispererUserGroup: CodeWhispererUserGroupSettings.getUserGroup().toString(),
+                    codewhispererCharactersAccepted: suggestion.originalString.length,
+                    codewhispererCharactersModified: 0, // TODO: currently we don't have an accurate number for this field with existing implementation
                 })
-                // TODO:
-                // Temperary comment out user modification event, need further discussion on how to calculate this metric
-                // TelemetryHelper.instance.sendUserModificationEvent(suggestion, percentage)
+
+                codeWhispererClient
+                    .sendTelemetryEvent({
+                        telemetryEvent: {
+                            userModificationEvent: {
+                                sessionId: suggestion.sessionId,
+                                requestId: suggestion.requestId,
+                                programmingLanguage: { languageName: suggestion.language },
+                                // deprecated % value and should not be used by service side
+                                modificationPercentage: percentage,
+                                customizationArn: customizationArn,
+                                timestamp: new Date(),
+                                acceptedCharacterCount: suggestion.originalString.length,
+                                unmodifiedAcceptedCharacterCount: getUnmodifiedAcceptedTokens(
+                                    suggestion.originalString,
+                                    currString
+                                ),
+                            },
+                        },
+                    })
+                    .then()
+                    .catch((error) => {
+                        let requestId: string | undefined
+                        if (isAwsError(error)) {
+                            requestId = error.requestId
+                        }
+
+                        getLogger().debug(
+                            `Failed to send UserModificationEvent to CodeWhisperer, requestId: ${requestId ?? ''}, message: ${
+                                error.message
+                            }`
+                        )
+                    })
             }
         }
     }
@@ -158,7 +195,8 @@ export class CodeWhispererTracker {
 
     public async startTimer() {
         if (!this._timer) {
-            this._timer = setTimeout(async () => {
+            this._timer = new Timeout(CodeWhispererTracker.defaultCheckPeriodMillis)
+            this._timer.onCompletion(async () => {
                 try {
                     await this.flush()
                 } finally {
@@ -166,13 +204,13 @@ export class CodeWhispererTracker {
                         this._timer!.refresh()
                     }
                 }
-            }, CodeWhispererTracker.defaultCheckPeriodMillis)
+            })
         }
     }
 
     public closeTimer() {
         if (this._timer !== undefined) {
-            clearTimeout(this._timer)
+            this._timer.cancel()
             this._timer = undefined
         }
     }

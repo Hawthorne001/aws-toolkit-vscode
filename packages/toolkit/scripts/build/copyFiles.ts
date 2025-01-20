@@ -3,17 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as fs from 'fs-extra'
+/* eslint-disable no-restricted-imports */
+import fs from 'fs'
 import * as path from 'path'
 
 // Copies various dependencies into "dist/".
-//
-// Options:
-//  `--vueHr`: controls whether files are copied from "node_modules/aws-core-vscode/dist/vuehr/" (Vue Hot Reload) or "…/vue/"
 
 const projectRoot = process.cwd()
 const outRoot = path.join(projectRoot, 'dist')
-let vueHr = false
 
 // The target file or directory must exist, otherwise we should fail the whole build.
 interface CopyTask {
@@ -29,23 +26,20 @@ interface CopyTask {
 }
 
 const tasks: CopyTask[] = [
-    ...[
-        'CHANGELOG.md',
-        'LICENSE',
-        'NOTICE',
-        'README.md',
-        'README.quickstart.cloud9.md',
-        'README.quickstart.vscode.md',
-        'quickStartCloud9-cn.html',
-        'quickStartCloud9.html',
-        'quickStartVscode.html',
-    ].map(f => {
+    ...['LICENSE', 'NOTICE'].map((f) => {
         return { target: path.join('../../', f), destination: path.join(projectRoot, f) }
     }),
 
     { target: path.join('../core', 'resources'), destination: path.join('..', 'resources') },
-    { target: path.join('../core', 'package.nls.json'), destination: path.join('..', 'package.nls.json') },
+    {
+        target: path.join('../core/', 'package.nls.json'),
+        destination: path.join('..', 'package.nls.json'),
+    },
     { target: path.join('../core', 'src', 'templates'), destination: path.join('src', 'templates') },
+    {
+        target: '../core/src/auth/sso/vue',
+        destination: 'src/auth/sso/vue',
+    },
 
     // SSM
     {
@@ -85,7 +79,7 @@ const tasks: CopyTask[] = [
         destination: path.join('libs', 'vue.min.js'),
     },
     {
-        target: path.join('../../node_modules/aws-core-vscode/dist', vueHr ? 'vuehr' : 'vue'),
+        target: path.join('../../node_modules/aws-core-vscode/dist', 'vue'),
         destination: 'vue/',
     },
 
@@ -106,33 +100,28 @@ const tasks: CopyTask[] = [
     },
 ]
 
-async function copy(task: CopyTask): Promise<void> {
+function copy(task: CopyTask): void {
     const src = path.resolve(projectRoot, task.target)
     const dst = path.resolve(outRoot, task.destination ?? task.target)
 
     try {
-        await fs.copy(src, dst, {
+        fs.cpSync(src, dst, {
             recursive: true,
-            overwrite: true,
+            force: true,
             errorOnExist: false,
         })
     } catch (error) {
         throw new Error(`Copy "${src}" to "${dst}" failed: ${error instanceof Error ? error.message : error}`)
     }
 }
-
-void (async () => {
-    const args = process.argv.slice(2)
-    if (args.includes('--vueHr')) {
-        vueHr = true
-        console.log('Using Vue Hot Reload webpacks from core/')
-    }
-
+function main() {
     try {
-        await Promise.all(tasks.map(copy))
+        tasks.map(copy)
     } catch (error) {
         console.error('`copyFiles.ts` failed')
         console.error(error)
         process.exit(1)
     }
-})()
+}
+
+void main()

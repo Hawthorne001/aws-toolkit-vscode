@@ -18,9 +18,7 @@ import { DevEnvClient } from '../shared/clients/devenvClient'
 import { getLogger } from '../shared/logger'
 import { AsyncCollection, toCollection } from '../shared/utilities/asyncCollection'
 import { getCodeCatalystSpaceName, getCodeCatalystProjectName, getCodeCatalystDevEnvId } from '../shared/vscode/env'
-import { writeFile } from 'fs-extra'
 import { sshAgentSocketVariable, startSshAgent, startVscodeRemote } from '../shared/extensions/ssh'
-import { ChildProcess } from '../shared/utilities/childProcess'
 import { isDevenvVscode } from './utils'
 import { Timeout } from '../shared/utilities/timeoutUtils'
 import { Commands } from '../shared/vscode/commands2'
@@ -29,8 +27,9 @@ import { fileExists } from '../shared/filesystemUtilities'
 import { CodeCatalystAuthenticationProvider } from './auth'
 import { ToolkitError } from '../shared/errors'
 import { Result } from '../shared/utilities/result'
-import { VscodeRemoteConnection, ensureDependencies } from '../shared/remoteSession'
+import { EnvProvider, VscodeRemoteConnection, createBoundProcess, ensureDependencies } from '../shared/remoteSession'
 import { SshConfig, sshLogFileLocation } from '../shared/sshConfig'
+import { fs } from '../shared'
 
 export type DevEnvironmentId = Pick<DevEnvironment, 'id' | 'org' | 'project'>
 export const connectScriptPrefix = 'codecatalyst_connect'
@@ -111,30 +110,8 @@ export function createCodeCatalystEnvProvider(
     }
 }
 
-type EnvProvider = () => Promise<NodeJS.ProcessEnv>
-
-/**
- * Creates a new {@link ChildProcess} class bound to a specific dev environment. All instances of this
- * derived class will have SSM session information injected as environment variables as-needed.
- */
-export function createBoundProcess(envProvider: EnvProvider): typeof ChildProcess {
-    type Run = ChildProcess['run']
-    return class SessionBoundProcess extends ChildProcess {
-        public override async run(...args: Parameters<Run>): ReturnType<Run> {
-            const options = args[0]
-            const envVars = await envProvider()
-            const spawnOptions = {
-                ...options?.spawnOptions,
-                env: { ...envVars, ...options?.spawnOptions?.env },
-            }
-
-            return super.run({ ...options, spawnOptions })
-        }
-    }
-}
-
 export async function cacheBearerToken(bearerToken: string, devenvId: string): Promise<void> {
-    await writeFile(bearerTokenCacheLocation(devenvId), `${bearerToken}`, 'utf8')
+    await fs.writeFile(bearerTokenCacheLocation(devenvId), `${bearerToken}`, 'utf8')
 }
 
 export function bearerTokenCacheLocation(devenvId: string): string {
@@ -270,12 +247,12 @@ export async function openDevEnv(
 // Recording metrics like this is a lot more involved so for now we'll
 // assume that if the first step succeeds, the user probably succeeded
 // in connecting to the devenv
-export const codeCatalystConnectCommand = Commands.register(
+export const codeCatalystConnectCommand = Commands.declare(
     {
         id: '_aws.codecatalyst.connect',
         telemetryName: 'codecatalyst_connect',
     },
-    openDevEnv
+    () => (client, devenv, targetPath) => openDevEnv(client, devenv, targetPath)
 )
 
 export async function getDevfileLocation(client: DevEnvClient, root?: vscode.Uri) {
@@ -302,7 +279,7 @@ export async function getDevfileLocation(client: DevEnvClient, root?: vscode.Uri
 
     // TODO(sijaden): should make this load greedily and continously poll
     // latency is very high for some reason
-    const devfileLocation = await client.getStatus().then(r => r.location)
+    const devfileLocation = await client.getStatus().then((r) => r.location)
     if (!devfileLocation) {
         return checkDefaultLocations(rootDirectory)
     }
@@ -338,10 +315,10 @@ export function associateDevEnv(
         const devenvs = await client
             .listResources('devEnvironment')
             .flatten()
-            .filter(env => env.repositories.length > 0 && isDevenvVscode(env.ides))
-            .toMap(env => `${env.org.name}.${env.project.name}.${env.repositories[0].repositoryName}`)
+            .filter((env) => env.repositories.length > 0 && isDevenvVscode(env.ides))
+            .toMap((env) => `${env.org.name}.${env.project.name}.${env.repositories[0].repositoryName}`)
 
-        yield* repos.map(repo => ({
+        yield* repos.map((repo) => ({
             ...repo,
             devEnv: devenvs.get(`${repo.org.name}.${repo.project.name}.${repo.name}`),
         }))
@@ -362,5 +339,3 @@ export interface DevEnvMemento {
     /** CodeCatalyst Alias */
     alias: string | undefined
 }
-
-export const codecatalystReconnectKey = 'CODECATALYST_RECONNECT'

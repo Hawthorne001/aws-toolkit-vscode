@@ -5,17 +5,15 @@
 
 import assert from 'assert'
 import {
-    getRelativeDate,
     getStringHash,
     removeAnsi,
     truncate,
     truncateProps,
     indent,
-    formatLocalized,
-    formatDateTimestamp,
     sanitizeFilename,
+    toSnakeCase,
+    undefinedIfEmpty,
 } from '../../../shared/utilities/textUtilities'
-import globals from '../../../shared/extensionGlobals'
 
 describe('textUtilities', async function () {
     it('truncateProps()', async function () {
@@ -72,18 +70,6 @@ describe('textUtilities', async function () {
         assert.deepStrictEqual(indent('   abc\n\n  \n123\nfoo\n', 4, false), '       abc\n\n      \n    123\n    foo\n')
         assert.deepStrictEqual(indent('   abc\n\n    \n123\nfoo\n', 4, true), '    abc\n\n    \n    123\n    foo\n')
     })
-
-    it('formatLocalized()', async function () {
-        const d = new globals.clock.Date(globals.clock.Date.UTC(2013, 11, 17, 3, 24, 0))
-        assert.deepStrictEqual(formatLocalized(d, false), 'Dec 16, 2013 7:24:00 PM GMT-8')
-        assert.deepStrictEqual(formatLocalized(d, true), 'Dec 16, 2013 7:24:00 PM PST')
-    })
-
-    it('formatDateTimestamp()', async function () {
-        const d = new globals.clock.Date(globals.clock.Date.UTC(2013, 11, 17, 3, 24, 0))
-        assert.deepStrictEqual(formatDateTimestamp(true, d), '2013-12-17T03:24:00.000-08:00')
-        assert.deepStrictEqual(formatDateTimestamp(false, d), '2013-12-16T19:24:00.000+00:00')
-    })
 })
 
 describe('removeAnsi', async function () {
@@ -107,30 +93,41 @@ describe('getStringHash', async function () {
     })
 })
 
-describe('getRelativeDate', function () {
-    const now = new Date(2020, 4, 4, 4, 4, 4) // adjusts for clock skew modifier in `getRelativeDate` fn.
-    it('produces readable dates', function () {
-        const years = getRelativeDate(new Date(2018, 4, 4, 4, 4, 9), now)
-        const year = getRelativeDate(new Date(2019, 4, 4, 4, 4, 9), now)
-        const months = getRelativeDate(new Date(2019, 5, 4, 4, 4, 9), now)
-        const month = getRelativeDate(new Date(2020, 3, 4, 4, 4, 9), now)
-        const weeks = getRelativeDate(new Date(2020, 3, 9, 4, 4, 9), now)
-        const week = getRelativeDate(new Date(2020, 3, 27, 4, 4, 9), now)
-        const days = getRelativeDate(new Date(2020, 4, 2, 4, 4, 9), now)
-        const day = getRelativeDate(new Date(2020, 4, 3, 4, 4, 9), now)
-        const hour = getRelativeDate(new Date(2020, 4, 4, 3, 4, 9), now)
-        const minute = getRelativeDate(new Date(2020, 4, 4, 4, 3, 9), now)
+describe('toSnakeCase', function () {
+    const expected = {
+        foo_bar_fi: 'fi',
+        fi_fo_fum: 'fum',
+    }
 
-        assert.strictEqual(years, '2 years ago')
-        assert.strictEqual(year, 'last year')
-        assert.strictEqual(months, '11 months ago')
-        assert.strictEqual(month, 'last month')
-        assert.strictEqual(weeks, '4 weeks ago')
-        assert.strictEqual(week, 'last week')
-        assert.strictEqual(days, '2 days ago')
-        assert.strictEqual(day, 'yesterday')
-        assert.strictEqual(hour, '1 hour ago')
-        assert.strictEqual(minute, '1 minute ago')
+    it('converts camel case to snake case', function () {
+        const input = {
+            fooBarFi: 'fi',
+            fiFoFum: 'fum',
+        }
+
+        assert.deepStrictEqual(toSnakeCase(input), expected)
+    })
+
+    it('converts pascal case to snake case', function () {
+        const input = {
+            FooBarFi: 'fi',
+            FiFoFum: 'fum',
+        }
+
+        assert.deepStrictEqual(toSnakeCase(input), expected)
+    })
+
+    it('converts upper case to snake case', function () {
+        const input = {
+            FOO_BAR_FI: 'fi',
+            FI_FO_FUM: 'fum',
+        }
+
+        assert.deepStrictEqual(toSnakeCase(input), expected)
+    })
+
+    it('maintains snake case', function () {
+        assert.deepStrictEqual(toSnakeCase(expected), expected)
     })
 })
 
@@ -144,9 +141,25 @@ describe('sanitizeFilename', function () {
         { input: 'foo.txt', output: 'foo.txt', case: 'keeps dot' },
         { input: 'züb', output: 'züb', case: 'keeps special chars' },
     ]
-    cases.forEach(testCase => {
+    for (const testCase of cases) {
         it(testCase.case, function () {
             assert.strictEqual(sanitizeFilename(testCase.input, testCase.replaceString), testCase.output)
         })
-    })
+    }
+})
+
+describe('undefinedIfEmpty', function () {
+    const cases: { input: string | undefined; output: string | undefined; case: string }[] = [
+        { input: undefined, output: undefined, case: 'return undefined if input is undefined' },
+        { input: '', output: undefined, case: 'return undefined if input is empty string' },
+        { input: '   ', output: undefined, case: 'return undefined if input is blank' },
+        { input: 'foo', output: 'foo', case: 'return str if input is not empty' },
+        { input: ' foo ', output: ' foo ', case: 'return original str without trim' },
+    ]
+
+    for (const testCases of cases) {
+        it(testCases.case, function () {
+            assert.strictEqual(undefinedIfEmpty(testCases.input), testCases.output)
+        })
+    }
 })

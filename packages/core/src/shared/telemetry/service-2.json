@@ -45,7 +45,9 @@
         "AWS Toolkit For JetBrains",
         "AWS Toolkit For Eclipse",
         "AWS Toolkit For VisualStudio",
-        "AWS Toolkit For VS Code"
+        "AWS Toolkit For VS Code",
+        "Amazon Q For JetBrains",
+        "Amazon Q For VS Code"
       ]
     },
     "AWSProductVersion":{
@@ -53,6 +55,10 @@
       "pattern":"^[\\w+-.]{1,512}$"
     },
     "ClientID":{
+      "type":"string",
+      "pattern":"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+    },
+    "SessionID":{
       "type":"string",
       "pattern":"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
     },
@@ -205,6 +211,7 @@
         "AWSProduct":{"shape":"AWSProduct"},
         "AWSProductVersion":{"shape":"AWSProductVersion"},
         "ClientID":{"shape":"ClientID"},
+        "SessionID":{"shape":"SessionID"},
         "OS":{"shape":"Value"},
         "OSVersion":{"shape":"Value"},
         "ComputeEnv": {"shape":"ComputeEnv"},

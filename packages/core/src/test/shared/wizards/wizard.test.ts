@@ -110,7 +110,7 @@ class TestPrompter<T, S = any> extends Prompter<T> {
         this.acceptedEstimators.push(estimator)
     }
 
-    //----------------------------Test helper methods go below this line----------------------------//
+    // ----------------------------Test helper methods go below this line----------------------------//
 
     public acceptState(state: StateWithCache<S, T>): this {
         this.acceptedStates[this.promptCount] = state
@@ -160,12 +160,20 @@ class TestPrompter<T, S = any> extends Prompter<T> {
 
     public assertStepEstimate(input: T, expected: number): AssertStepMethods {
         return {
-            onCall: (...order: number[]) => order.forEach(i => this.checkEstimate(input, expected, i)),
+            onCall: (...order: number[]) => {
+                for (const i of order) {
+                    this.checkEstimate(input, expected, i)
+                }
+            },
             onFirstCall: () => this.checkEstimate(input, expected, 1),
             onSecondCall: () => this.checkEstimate(input, expected, 2),
             onThirdCall: () => this.checkEstimate(input, expected, 3),
             onFourthCall: () => this.checkEstimate(input, expected, 4),
-            onEveryCall: () => this.acceptedStates.forEach((_, i) => this.checkEstimate(input, expected, i + 1)),
+            onEveryCall: () => {
+                for (const [i, _] of this.acceptedStates.entries()) {
+                    this.checkEstimate(input, expected, i + 1)
+                }
+            },
         } as AssertStepMethods
     }
 
@@ -185,12 +193,20 @@ class TestPrompter<T, S = any> extends Prompter<T> {
     /** Check if the prompter was given the expected steps */
     public assertSteps(current: number, total: number): AssertStepMethods {
         return {
-            onCall: (...order: number[]) => order.forEach(i => this.checkSteps([current, total], i)),
+            onCall: (...order: number[]) => {
+                for (const i of order) {
+                    this.checkSteps([current, total], i)
+                }
+            },
             onFirstCall: () => this.checkSteps([current, total], 1),
             onSecondCall: () => this.checkSteps([current, total], 2),
             onThirdCall: () => this.checkSteps([current, total], 3),
             onFourthCall: () => this.checkSteps([current, total], 4),
-            onEveryCall: () => this.acceptedSteps.forEach((_, i) => this.checkSteps([current, total], i + 1)),
+            onEveryCall: () => {
+                for (const [i, _] of this.acceptedSteps.entries()) {
+                    this.checkSteps([current, total], i + 1)
+                }
+            },
         } as AssertStepMethods
     }
 
@@ -211,15 +227,15 @@ describe('Wizard', function () {
 
     it('binds prompter to (sync AND async) property', async function () {
         wizard.form.prop1.bindPrompter(() => helloPrompter)
-        wizard.form.prop3.bindPrompter(async () => new SkipPrompter('helloooo (async)'))
+        wizard.form.prop3.bindPrompter(async () => new SkipPrompter())
 
         const result = await wizard.run()
         assert.strictEqual(result?.prop1, 'hello')
-        assert.strictEqual(result?.prop3, 'helloooo (async)')
+        assert(!result?.prop3)
     })
 
     it('initializes state to empty object if not provided', async function () {
-        wizard.form.prop1.bindPrompter(() => helloPrompter, { showWhen: state => state !== undefined })
+        wizard.form.prop1.bindPrompter(() => helloPrompter, { showWhen: (state) => state !== undefined })
 
         assert.strictEqual((await wizard.run())?.prop1, 'hello')
     })
@@ -236,7 +252,7 @@ describe('Wizard', function () {
         const checkForHello = (state: TestWizardForm) => state.prop1 !== 'hello'
         const exitPrompter = new TestPrompter(checkForHello, true).setName('Exit Dialog')
         const exitSignalPrompter = new TestPrompter<string>(WIZARD_EXIT, WIZARD_EXIT).setName('Exit Signal')
-        wizard = new Wizard({ exitPrompterProvider: state => exitPrompter.acceptState(state as any) })
+        wizard = new Wizard({ exitPrompterProvider: (state) => exitPrompter.acceptState(state as any) })
         wizard.form.prop1.bindPrompter(() => helloPrompter)
         wizard.form.prop3.bindPrompter(() => exitSignalPrompter)
 
@@ -272,8 +288,8 @@ describe('Wizard', function () {
         const firstStep = new TestPrompter('0')
         const secondStep = new TestPrompter('1')
 
-        wizard.form.prop1.bindPrompter(state => firstStep.acceptState(state))
-        wizard.form.prop3.bindPrompter(() => secondStep, { showWhen: state => state.prop1 === '1' })
+        wizard.form.prop1.bindPrompter((state) => firstStep.acceptState(state))
+        wizard.form.prop3.bindPrompter(() => secondStep, { showWhen: (state) => state.prop1 === '1' })
 
         assert.deepStrictEqual(await wizard.run(), { prop1: '0' })
         firstStep.assertStepEstimate('0', 0).onFirstCall()
@@ -287,11 +303,11 @@ describe('Wizard', function () {
         const thirdStep = new TestPrompter(WIZARD_BACK, 1)
 
         wizard.parentEstimator = parentEstimator
-        wizard.form.prop1.bindPrompter(state => firstStep.acceptState(state))
-        wizard.form.prop3.bindPrompter(state => secondStep.acceptState(state), {
-            showWhen: state => state.prop1 === '1',
+        wizard.form.prop1.bindPrompter((state) => firstStep.acceptState(state))
+        wizard.form.prop3.bindPrompter((state) => secondStep.acceptState(state), {
+            showWhen: (state) => state.prop1 === '1',
         })
-        wizard.form.prop2.bindPrompter(state => thirdStep.acceptState(state))
+        wizard.form.prop2.bindPrompter((state) => thirdStep.acceptState(state))
 
         assert.deepStrictEqual(await wizard.run(), { prop1: '1', prop2: 1, prop3: '1' })
         firstStep.assertStepEstimate('0', 0).onEveryCall()
@@ -311,7 +327,7 @@ describe('Wizard', function () {
         const testPrompter1 = new TestPrompter('first', noWizardControl).setName('Test 1')
         const testPrompter2 = new TestPrompter(WIZARD_BACK, 22).setName('Test 2')
 
-        wizard.form.prop1.bindPrompter(state => testPrompter1.acceptState(state))
+        wizard.form.prop1.bindPrompter((state) => testPrompter1.acceptState(state))
         wizard.form.prop2.bindPrompter(() => testPrompter2)
 
         assert.deepStrictEqual(await wizard.run(), { prop1: 'good', prop2: 22 })
@@ -355,9 +371,9 @@ describe('Wizard', function () {
             testPrompterPath2.setTotalSteps(3)
 
             wizard.form.prop1.bindPrompter(() => testPrompterStart)
-            wizard.form.prop2.bindPrompter(() => testPrompterPath1, { showWhen: state => state.prop1 === 'A' })
-            wizard.form.prop3.bindPrompter(() => testPrompterPath2, { showWhen: state => state.prop1 === 'B' })
-            wizard.form.prop4.bindPrompter(state => testPrompterEnd.acceptState(state))
+            wizard.form.prop2.bindPrompter(() => testPrompterPath1, { showWhen: (state) => state.prop1 === 'A' })
+            wizard.form.prop3.bindPrompter(() => testPrompterPath2, { showWhen: (state) => state.prop1 === 'B' })
+            wizard.form.prop4.bindPrompter((state) => testPrompterEnd.acceptState(state))
 
             assert.deepStrictEqual(await wizard.run(), { prop1: 'B', prop3: 'bob', prop4: 'hello bob' })
             testPrompterStart.assertCallCount(4)

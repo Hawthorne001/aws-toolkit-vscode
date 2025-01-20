@@ -25,7 +25,7 @@ describe('StepFunctionsNode', function () {
         const client = stub(DefaultStepFunctionsClient, { regionCode })
         client.listStateMachines.returns(
             asyncGenerator(
-                stateMachineNames.map(name => {
+                stateMachineNames.map((name) => {
                     return {
                         name: name,
                         stateMachineArn: 'arn:aws:states:us-east-1:123412341234:stateMachine:' + name,
@@ -52,14 +52,14 @@ describe('StepFunctionsNode', function () {
 
         assert.strictEqual(childNodes.length, 2, 'Unexpected child count')
 
-        childNodes.forEach(node => {
+        for (const node of childNodes) {
             assert.ok(node instanceof StateMachineNode, 'Expected child node to be StateMachineNode')
             assert.strictEqual(
                 node.contextValue,
                 contextValueStateMachine,
                 'expected the node to have a State Machine contextValue'
             )
-        })
+        }
     })
 
     it('sorts child nodes', async function () {
@@ -67,7 +67,7 @@ describe('StepFunctionsNode', function () {
         const testNode = new StepFunctionsNode(regionCode, client)
         const childNodes = await testNode.getChildren()
 
-        const actualChildOrder = childNodes.map(node => node.label)
+        const actualChildOrder = childNodes.map((node) => node.label)
         assert.deepStrictEqual(actualChildOrder, ['a', 'b', 'c'], 'Unexpected child sort order')
     })
 

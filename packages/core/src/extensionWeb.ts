@@ -4,20 +4,21 @@
  */
 
 import * as vscode from 'vscode'
-import { setWeb } from './common/webUtils'
 import { getLogger } from './shared/logger'
-import { activateShared, deactivateShared } from './extensionShared'
-import os from 'os'
+import { activateCommon, deactivateCommon } from './extension'
+import { activateWebShared } from './extensionWebShared'
 
 export async function activate(context: vscode.ExtensionContext) {
-    setWeb(true) // THIS MUST ALWAYS BE FIRST
+    const contextPrefix = 'toolkit'
+
+    await activateWebShared(context)
 
     try {
-        patchOsVersion()
-
         // IMPORTANT: Any new activation code should be done in the function below unless
         // it is web mode specific activation code.
-        await activateShared(context)
+        // This should happen as early as possible, as initialize() must be called before
+        // isWeb() calls will work.
+        await activateCommon(context, contextPrefix, true)
     } catch (error) {
         const stacktrace = (error as Error).stack?.split('\n')
         // truncate if the stacktrace is unusually long
@@ -28,17 +29,6 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 }
 
-/**
- * The browserfied version of os does not have a `version()` method,
- * so we patch it.
- */
-function patchOsVersion() {
-    ;(os.version as any) = () => '1.0.0'
-}
-
 export async function deactivate() {
-    await deactivateShared()
+    await deactivateCommon()
 }
-
-export const awsToolkitWebActivate = activate
-export const awsToolkitWebDeactivate = deactivate

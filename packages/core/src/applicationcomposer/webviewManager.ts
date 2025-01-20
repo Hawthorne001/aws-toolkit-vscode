@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode'
 import * as nls from 'vscode-nls'
-import request from '../common/request'
+import request from '../shared/request'
 import { ApplicationComposer } from './composerWebview'
 import { getLogger } from '../shared/logger'
 
@@ -23,13 +23,15 @@ export class ApplicationComposerManager {
     protected readonly name: string = 'ApplicationComposerManager'
 
     protected readonly managedVisualizations = new Map<string, ApplicationComposer>()
-    protected extensionContext: vscode.ExtensionContext
     protected webviewHtml?: string
     protected readonly logger = getLogger()
 
-    public constructor(extensionContext: vscode.ExtensionContext) {
-        this.extensionContext = extensionContext
-        void this.fetchWebviewHtml()
+    private constructor(protected extensionContext: vscode.ExtensionContext) {}
+
+    public static async create(extensionContext: vscode.ExtensionContext): Promise<ApplicationComposerManager> {
+        const obj = new ApplicationComposerManager(extensionContext)
+        await obj.fetchWebviewHtml()
+        return obj
     }
 
     private async fetchWebviewHtml() {
@@ -41,7 +43,7 @@ export class ApplicationComposerManager {
         }
     }
 
-    private getWebviewContent = () => {
+    private getWebviewContent = async () => {
         if (!this.webviewHtml) {
             void this.fetchWebviewHtml()
             return ''
@@ -76,9 +78,22 @@ export class ApplicationComposerManager {
 
         // Existing visualization does not exist, construct new visualization
         try {
-            const newVisualization = new ApplicationComposer(document, this.extensionContext, this.getWebviewContent)
+            const newVisualization = await ApplicationComposer.create(
+                document,
+                this.extensionContext,
+                this.getWebviewContent
+            )
             this.handleNewVisualization(document.uri.fsPath, newVisualization)
 
+            if (vscode.version === '1.91.0') {
+                void vscode.window.showWarningMessage(
+                    localize(
+                        'AWS.applicationComposer.visualisation.warnings.draganddrop',
+                        'This version of Visual Studio Code has a bug preventing normal drag and drop functionality. ' +
+                            'As a temporary workaround, hold the Shift key before releasing a resource onto the visual canvas.'
+                    )
+                )
+            }
             return newVisualization.getPanel()
         } catch (err) {
             this.handleErr(err as Error)
@@ -90,7 +105,11 @@ export class ApplicationComposerManager {
             const document = await vscode.workspace.openTextDocument({
                 language: 'yaml',
             })
-            const newVisualization = new ApplicationComposer(document, this.extensionContext, this.getWebviewContent)
+            const newVisualization = await ApplicationComposer.create(
+                document,
+                this.extensionContext,
+                this.getWebviewContent
+            )
             this.handleNewVisualization(document.uri.fsPath, newVisualization)
 
             return newVisualization.getPanel()
@@ -107,7 +126,7 @@ export class ApplicationComposerManager {
         void vscode.window.showInformationMessage(
             localize(
                 'AWS.applicationComposer.visualisation.errors.rendering',
-                'There was an error rendering Application Composer, check logs for details.'
+                'There was an error rendering Infrastructure Composer, check logs for details.'
             )
         )
         this.logger.error(`${this.name}: Unable to show App Composer webview: ${err}`)

@@ -25,8 +25,8 @@ export const showCodeWhispererConnectionPrompt = async () => {
         : [createBuilderIdItem(), createSsoItem(), createCodeWhispererIamItem()]
 
     const resp = await showQuickPick(items, {
-        title: 'CodeWhisperer: Add Connection to AWS',
-        placeholder: 'Select a connection option to start using CodeWhisperer',
+        title: 'Amazon Q: Add Connection to AWS',
+        placeholder: 'Select a connection option to start using Amazon Q',
         buttons: createCommonButtons() as vscode.QuickInputButton[],
     })
 
@@ -48,19 +48,21 @@ export const showCodeWhispererConnectionPrompt = async () => {
 
 export async function awsIdSignIn() {
     getLogger().info('selected AWS ID sign in')
+    let conn
     try {
-        await AuthUtil.instance.connectToAwsBuilderId()
+        conn = await AuthUtil.instance.connectToAwsBuilderId()
     } catch (e) {
         throw ToolkitError.chain(e, failedToConnectAwsBuilderId, { code: 'FailedToConnect' })
     }
     vsCodeState.isFreeTierLimitReached = false
-    await Commands.tryExecute('aws.amazonq.refresh')
-    await Commands.tryExecute('aws.codeWhisperer.enableCodeSuggestions')
+    await Commands.tryExecute('aws.amazonq.enableCodeSuggestions')
+
+    return conn
 }
 
 export const createCodeWhispererIamItem = () => {
     const item = createIamItem()
-    item.detail = 'Not supported by CodeWhisperer.'
+    item.detail = 'Not supported by Amazon Q'
     item.description = 'not supported'
     item.invalidSelection = true
 
