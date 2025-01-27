@@ -50,7 +50,9 @@ export function getInstanceDescription(type: InstanceType): InstanceDescription 
 
 export function getAllInstanceDescriptions(): { [key: string]: InstanceDescription } {
     const desc: { [key: string]: InstanceDescription } = {}
-    entries(devenvOptions.instanceType).forEach(([k]) => (desc[k] = getInstanceDescription(k)))
+    for (const [k] of entries(devenvOptions.instanceType)) {
+        desc[k] = getInstanceDescription(k)
+    }
     return desc
 }
 
@@ -72,14 +74,14 @@ export function createTimeoutPrompter(): Prompter<number> {
     return createInputBox({
         title: 'Timeout Length',
         placeholder: 'Timeout length in minutes',
-        validateInput: resp => (Number.isNaN(Number(resp)) ? 'Timeout must be a number' : undefined),
+        validateInput: (resp) => (Number.isNaN(Number(resp)) ? 'Timeout must be a number' : undefined),
     }).transform(Number)
 }
 
 export function createAliasPrompter(): InputBoxPrompter {
     return createInputBox({
         title: 'Edit Alias',
-        validateInput: value => {
+        validateInput: (value) => {
             if (value?.length > 128) {
                 return 'Dev Environment alias cannot be longer than 128 characters'
             }
@@ -89,7 +91,7 @@ export function createAliasPrompter(): InputBoxPrompter {
 
 export function createStoragePrompter(subscriptionType: SubscriptionType): QuickPickPrompter<{ sizeInGiB: number }> {
     const isSupported = (v: number) => subscriptionType !== 'FREE' || v === 16
-    const items = settings.environment.persistentStorageSize.map(v => ({
+    const items = settings.environment.persistentStorageSize.map((v) => ({
         data: { sizeInGiB: v },
         label: `${v} GB`,
         description: isSupported(v) ? '' : 'unavailable in current organization billing tier',

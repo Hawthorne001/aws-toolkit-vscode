@@ -179,7 +179,7 @@ describe('LaunchConfiguration', function () {
     it('gets aws-sam debug configurations', async function () {
         const launchConfig = new LaunchConfiguration(templateUriJsPlainApp)
         const expected = (testLaunchJsonData['configurations'] as any[]).filter(
-            o => o.type === 'aws-sam' && o.request === 'direct-invoke'
+            (o) => o.type === 'aws-sam' && o.request === 'direct-invoke'
         )
         const actual = await launchConfig.getSamDebugConfigurations()
         assertEqualLaunchJsons(actual, expected, workspace.uri, true)
@@ -209,7 +209,7 @@ describe('getReferencedHandlerPaths', function () {
         const resultSet = await getReferencedHandlerPaths(mockLaunchConfig)
         const workspaceFolder = mockLaunchConfig.workspaceFolder!.uri.fsPath
 
-        //template type handlers, these are all false as we throw all of these out
+        // template type handlers, these are all false as we throw all of these out
         assert.strictEqual(resultSet.has('resource'), false)
         assert.strictEqual(resultSet.has('relativePathGoodTemplate'), false)
         assert.strictEqual(resultSet.has('relativePathBadTemplate'), false)

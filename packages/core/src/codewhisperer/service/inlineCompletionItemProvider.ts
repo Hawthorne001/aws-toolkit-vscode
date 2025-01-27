@@ -12,6 +12,7 @@ import { ReferenceInlineProvider } from './referenceInlineProvider'
 import { ImportAdderProvider } from './importAdderProvider'
 import { application } from '../util/codeWhispererApplication'
 import path from 'path'
+import { UserWrittenCodeTracker } from '../tracker/userWrittenCodeTracker'
 
 export class CWInlineCompletionItemProvider implements vscode.InlineCompletionItemProvider {
     private activeItemIndex: number | undefined
@@ -109,7 +110,7 @@ export class CWInlineCompletionItemProvider implements vscode.InlineCompletionIt
             insertText: truncatedSuggestion,
             range: new vscode.Range(start, end),
             command: {
-                command: 'aws.codeWhisperer.accept',
+                command: 'aws.amazonq.accept',
                 title: 'On acceptance',
                 arguments: [
                     new vscode.Range(start, end),
@@ -155,7 +156,7 @@ export class CWInlineCompletionItemProvider implements vscode.InlineCompletionIt
         const iteratingIndexes = this.getIteratingIndexes()
         const prefix = document.getText(new vscode.Range(start, end)).replace(/\r\n/g, '\n')
         const matchedCount = session.recommendations.filter(
-            r => r.content.length > 0 && r.content.startsWith(prefix) && r.content !== prefix
+            (r) => r.content.length > 0 && r.content.startsWith(prefix) && r.content !== prefix
         ).length
         for (const i of iteratingIndexes) {
             const r = session.recommendations[i]
@@ -169,11 +170,18 @@ export class CWInlineCompletionItemProvider implements vscode.InlineCompletionIt
             ImportAdderProvider.instance.onShowRecommendation(document, this.startPos.line, r)
             this.nextMove = 0
             TelemetryHelper.instance.setFirstSuggestionShowTime()
+            session.setPerceivedLatency()
+            UserWrittenCodeTracker.instance.onQStartsMakingEdits()
             this._onDidShow.fire()
             if (matchedCount >= 2 || this.nextToken !== '') {
                 const result = [item]
                 for (let j = 0; j < matchedCount - 1; j++) {
-                    result.push({ insertText: `${item.insertText}${j}`, range: item.range })
+                    result.push({
+                        insertText: `${
+                            typeof item.insertText === 'string' ? item.insertText : item.insertText.value
+                        }${j}`,
+                        range: item.range,
+                    })
                 }
                 return result
             }

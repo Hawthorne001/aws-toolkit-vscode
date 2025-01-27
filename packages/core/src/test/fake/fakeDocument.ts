@@ -15,7 +15,11 @@ class MockLine implements TextLine {
 
     private _isEmpty: boolean | undefined
 
-    constructor(private _contents: string, private _line: number, private _offset: number) {
+    constructor(
+        private _contents: string,
+        private _line: number,
+        private _offset: number
+    ) {
         this._range = new Range(new Position(_line, 0), new Position(_line, _contents.length))
         this._rangeWithLineBreak = new Range(this.range.start, new Position(_line, _contents.length + 1))
     }
@@ -42,7 +46,7 @@ class MockLine implements TextLine {
 
     public get firstNonWhitespaceCharacterIndex(): number {
         if (this._firstNonWhitespaceIndex === undefined) {
-            this._firstNonWhitespaceIndex = this._contents.trimStart().length - this._contents.length
+            this._firstNonWhitespaceIndex = this._contents.length - this._contents.trimStart().length
         }
         return this._firstNonWhitespaceIndex
     }

@@ -7,13 +7,20 @@ import assert from 'assert'
 import * as FakeTimers from '@sinonjs/fake-timers'
 import * as timeoutUtils from '../../../shared/utilities/timeoutUtils'
 import { installFakeClock, tickPromise } from '../../../test/testUtil'
-import { sleep } from '../../../shared/utilities/timeoutUtils'
+import { sleep, waitUntil } from '../../../shared/utilities/timeoutUtils'
+import { SinonStub, SinonSandbox, createSandbox } from 'sinon'
 
-describe('timeoutUtils', async function () {
+// We export this describe() so it can be used in the web tests as well
+export const timeoutUtilsDescribe = describe('timeoutUtils', async function () {
     let clock: FakeTimers.InstalledClock
+    let sandbox: SinonSandbox
 
     before(function () {
         clock = installFakeClock()
+    })
+
+    beforeEach(function () {
+        sandbox = createSandbox()
     })
 
     after(function () {
@@ -23,6 +30,7 @@ describe('timeoutUtils', async function () {
     afterEach(function () {
         clock.reset()
         this.timer?.dispose()
+        sandbox.restore()
     })
 
     describe('Timeout', async function () {
@@ -191,6 +199,53 @@ describe('timeoutUtils', async function () {
         })
     })
 
+    describe('Interval', async function () {
+        let interval: timeoutUtils.Interval
+        let onCompletionStub: SinonStub
+
+        beforeEach(async function () {
+            onCompletionStub = sandbox.stub()
+            interval = new timeoutUtils.Interval(1000, onCompletionStub)
+        })
+
+        afterEach(async function () {
+            interval?.dispose()
+        })
+
+        it('Executes the callback on an interval', async function () {
+            await clock.tickAsync(999)
+            assert.strictEqual(onCompletionStub.callCount, 0)
+            await clock.tickAsync(1)
+            assert.strictEqual(onCompletionStub.callCount, 1)
+
+            await clock.tickAsync(500)
+            assert.strictEqual(onCompletionStub.callCount, 1)
+            await clock.tickAsync(500)
+            assert.strictEqual(onCompletionStub.callCount, 2)
+
+            await clock.tickAsync(1000)
+            assert.strictEqual(onCompletionStub.callCount, 3)
+        })
+
+        it('allows to wait for next completion', async function () {
+            clock.uninstall()
+
+            let curr = 'Did Not Change'
+
+            const realInterval = new timeoutUtils.Interval(50, async () => {
+                await sleep(50)
+                curr = 'Did Change'
+            })
+
+            const withoutWait = curr
+            await realInterval.nextCompletion()
+            const withWait = curr
+
+            assert.strictEqual(withoutWait, 'Did Not Change')
+            assert.strictEqual(withWait, 'Did Change')
+        })
+    })
+
     describe('waitUntil', async function () {
         const testSettings = {
             callCounter: 0,
@@ -244,6 +299,17 @@ describe('timeoutUtils', async function () {
                 timeout: 10000,
                 interval: 10,
                 truthy: false,
+            })
+            assert.strictEqual(returnValue, testSettings.callGoal)
+        })
+
+        it('returns value after multiple function calls WITH backoff', async function () {
+            testSettings.callGoal = 4
+            const returnValue: number | undefined = await timeoutUtils.waitUntil(testFunction, {
+                timeout: 10000,
+                interval: 10,
+                truthy: false,
+                backoff: 2,
             })
             assert.strictEqual(returnValue, testSettings.callGoal)
         })
@@ -318,6 +384,90 @@ describe('timeoutUtils', async function () {
                 truthy: true,
             })
             assert.strictEqual(result, undefined)
+        })
+    })
+
+    describe('waitUntil w/ retries', function () {
+        let fn: SinonStub<[], Promise<string | boolean>>
+
+        beforeEach(function () {
+            fn = sandbox.stub()
+        })
+
+        it('retries the function until it succeeds', async function () {
+            fn.onCall(0).throws()
+            fn.onCall(1).throws()
+            fn.onCall(2).resolves('success')
+
+            const res = waitUntil(fn, { retryOnFail: true })
+
+            await clock.tickAsync(timeoutUtils.waitUntilDefaultInterval)
+            assert.strictEqual(fn.callCount, 2)
+            await clock.tickAsync(timeoutUtils.waitUntilDefaultInterval)
+            assert.strictEqual(fn.callCount, 3)
+            assert.strictEqual(await res, 'success')
+        })
+
+        it('retryOnFail ignores truthiness', async function () {
+            fn.resolves(false)
+            const res = waitUntil(fn, { retryOnFail: true, truthy: true })
+            assert.strictEqual(await res, false)
+        })
+
+        // This test causes the following error, cannot figure out why:
+        // `rejected promise not handled within 1 second: Error: last`
+        it('throws the last error if the function always fails, using defaults', async function () {
+            fn.onCall(0).throws() // 0
+            fn.onCall(1).throws() // 500
+            fn.onCall(2).throws(new Error('second last')) // 1000
+            fn.onCall(3).throws(new Error('last')) // 1500
+            fn.onCall(4).resolves('this is not hit')
+
+            // We must wrap w/ assert.rejects() here instead of at the end, otherwise Mocha raise a
+            // `rejected promise not handled within 1 second: Error: last`
+            const res = assert.rejects(
+                waitUntil(fn, { retryOnFail: true }),
+                (e) => e instanceof Error && e.message === 'last'
+            )
+
+            await clock.tickAsync(timeoutUtils.waitUntilDefaultInterval) // 500
+            assert.strictEqual(fn.callCount, 2)
+            await clock.tickAsync(timeoutUtils.waitUntilDefaultInterval) // 1000
+            assert.strictEqual(fn.callCount, 3)
+            await clock.tickAsync(timeoutUtils.waitUntilDefaultInterval) // 1500
+            assert.strictEqual(fn.callCount, 4)
+
+            await res
+        })
+
+        it('honors retry delay + backoff multiplier', async function () {
+            fn.onCall(0).throws(Error('0')) // 0ms
+            fn.onCall(1).throws(Error('1')) // 100ms
+            fn.onCall(2).throws(Error('2')) // 200ms
+            fn.onCall(3).resolves('success') // 400ms
+
+            // Note 701 instead of 700 for timeout. The 1 millisecond allows the final call to execute
+            // since the timeout condition is >= instead of >
+            const res = waitUntil(fn, { timeout: 701, interval: 100, backoff: 2, retryOnFail: true })
+
+            // Check the call count after each iteration, ensuring the function is called
+            // after the correct delay between retries.
+            await clock.tickAsync(99)
+            assert.strictEqual(fn.callCount, 1)
+            await clock.tickAsync(1)
+            assert.strictEqual(fn.callCount, 2)
+
+            await clock.tickAsync(199)
+            assert.strictEqual(fn.callCount, 2)
+            await clock.tickAsync(1)
+            assert.strictEqual(fn.callCount, 3)
+
+            await clock.tickAsync(399)
+            assert.strictEqual(fn.callCount, 3)
+            await clock.tickAsync(1)
+            assert.strictEqual(fn.callCount, 4)
+
+            assert.strictEqual(await res, 'success')
         })
     })
 

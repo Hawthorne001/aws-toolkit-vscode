@@ -62,6 +62,17 @@ do the following:
 
 Now when you run the extension in the browser it will do CORS checks.
 
+## Running in [vscode.dev](https://vscode.dev)
+
+The following will explain how to get your latest local development changes running in the actual `vscode.dev`. Use this if you want to test on an actual VS Code Web instance.
+
+1. Build the extension. We need the Web mode entrypoint file to exist.
+2. OPTIONAL: Start up your browser with security disabled. Certain functionalities do not support CORS and will fail otherwise.
+    - On MacOS from the CLI is similar to `/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --disable-web-security`
+3. `cd` to the extension you want to test in `packages/`. Eg: `packages/amazonq/`.
+    - We need to do this since the following command hosts your build from the `cwd`.
+4. Follow the [VS Code documentation](https://code.visualstudio.com/api/extension-guides/web-extensions#test-your-web-extension-in-vscode.dev) for setting up certs, serving your the latest changes, and installing the extension to `vscode.dev`.
+
 ## Testing in VSCode Web Mode
 
 The following steps will result in a VSCode Extension window running
@@ -74,12 +85,14 @@ VS Code window, in the background it is running in a Browser context.
 
 ## Adding Web mode specific npm modules
 
-If you need to manage npm modules required for Web mode, such as a [browserfied module](https://www.npmjs.com/package/os-browserify), see [the documentation here](../packages/core/src/web/README.md).
+If you need to manage npm modules required for Web mode, such as a [browserfied module](https://www.npmjs.com/package/os-browserify), see [the documentation here](../packages/core/src/web/README.md#packagejson).
 
 ## Finding incompatible transitive dependencies
 
 For example, if I have a Typescript module, `myFile.ts`, that imports a module which imports another module (transitive dependency) such as `fs-extra`,
 when I execute `myFile.ts` in the browser it will break due to `fs-extra` not being browser compatible.
+
+> INFO: A common error is `Cannot read properties of undefined (reading 'native')` caused by `fs-extra`
 
 It may be difficult to determine which module imported `fs-extra` due to a nested chain of transitive dependencies.
 
@@ -91,69 +104,65 @@ to help us visualize the imports and determine which module is importing a certa
 1. Install the `graphviz` cli, this provides the `dot` cli command
     - Mac: `brew install graphviz`
     - Others: [See documentation](https://www.graphviz.org/download/)
-2. Run `npx depcruise {RELATIVE_PATH_TO_FILE}  --output-type dot | dot -T svg > dependency-graph.svg`
-    - For example, `npx depcruise src/srcShared/fs.ts  --output-type dot | dot -T svg > dependency-graph.svg` generates the following which shows `fs-extra` is imported by `fileSystemUtilities.ts`:
-      ![Dependency Graph](./images/dependency-graph.svg)
-    - Additionally specify a certain dependency with `--reaches` , `npx depcruise src/srcShared/fs.ts --reaches "fs-extra" --output-type dot | dot -T svg > dependency-graph.svg`, to hide unrelated dependencies:
+2. Temporarily install `dependency-cruiser`
+    - IMPORTANT: You will want to revert this install when done
+    - `npm i dependency-cruiser`
+3. Run `npx depcruise {RELATIVE_PATH_TO_FILE}  --reaches "{YOUR_MODULE}" --output-type dot | dot -T svg > dependency-graph.svg`
+    - For example `npx depcruise src/shared/fs/fs.ts --reaches "fs-extra" --output-type dot | dot -T svg > dependency-graph.svg`, generates the following which shows that `fs-extra` is imported by `fileSystemUtilities.ts`:
       ![Dependency Graph](./images/dependency-graph-small.svg)
 
-## Global Scoped Objects + Testing behavior
+## Behavior of module exports in tests
 
-### Summary
+-   **In Web mode**, state is not shared between the actual extension code and the unit test code. I.e you cannot modify an exported module variable in the extension code and see that change from the tests.
+-   However, state stored in `globalThis` is observable from the tests.
 
--   **When in Web mode**, state is not shared between the actual extension code and the unit test code. I.e you cannot modify a global variable in the extension code and see that change in the unit tests
--   State will need to be stored somewhere in `globalThis` to be accessible by tests. Any state not in `globalThis` will not be the same as the actual extension, they are separate.
-
-With the introduction of web mode support, it was discovered that the context between the extension code and test code is not shared.
+When running web tests, the context between the extension code and test code is not shared.
 Though it is shared in the Node version of the extension.
 
-Example that does NOT work in Web mode:
-
-```typescript
-export let myGlobal = 'A'
-
-function activate() {
-    // Change the global variable value
-    myGlobal = 'B'
-}
-```
-
-```typescript
-// Web unit test
-import { myGlobal } from '../src/extension.ts'
-
-describe('test', function () {
-    it('test', function () {
-        assert.strictEqual(myGlobal, 'B') // this fails in Web (but not Node.js). The value here is actually 'A'.
-    })
-})
-```
-
-Example that DOES work in Web mode:
-
-```typescript
-;(globalThis as any).myGlobal = 'A'
-
-function activate() {
-    ;(globalThis as any).myGlobal = 'B'
-}
-```
-
-```typescript
-// Web unit test
-describe('test', function () {
-    it('test', function () {
-        assert.strictEqual((globalThis as any).myGlobal, 'B') // this succeeds in Web and Node.js
-    })
-})
-```
+-   Does NOT work in Web mode tests:
+    -   Module code:
+        ```typescript
+        export let myGlobal = 'A'
+        function activate() {
+            // Change the exported module variable.
+            myGlobal = 'B'
+        }
+        ```
+    -   Test code:
+        ```typescript
+        // Web unit test
+        import { myGlobal } from '../src/extension.ts'
+        describe('test', function () {
+            it('test', function () {
+                assert.strictEqual(myGlobal, 'B') // Fails in Web (but not Node.js). The value is 'A'.
+            })
+        })
+        ```
+-   DOES work in Web mode tests:
+    -   Module code:
+        ```typescript
+        ;(globalThis as any).myGlobal = 'A'
+        function activate() {
+            ;(globalThis as any).myGlobal = 'B'
+        }
+        ```
+    -   Test code:
+        ```typescript
+        // Web unit test
+        describe('test', function () {
+            it('test', function () {
+                assert.strictEqual((globalThis as any).myGlobal, 'B') // Passes in Web and Node.js.
+            })
+        })
+        ```
 
 ### Web Worker
 
-The assumption for the behavior is due to how Web Workers work. We (VS Code) use them to run our extension and unit test code when in the browser. The scripts share global values differently compared to a different environment such as Node.js.
+The assumption for the behavior is due to how Web Workers work. We (VS Code) use them to run our extension and test code in the browser. The scripts share module exports differently compared to a different environment such as Node.js.
 
 -   [`WorkerGlobalScope`](https://developer.mozilla.org/en-US/docs/Web/API/WorkerGlobalScope)
-    -   The context of the executing code is contained within itself and is not accessible to other scripts (eg: extension code context is not accessible by unit tests)
+    -   The context of the executing code is contained within itself and is not accessible to other scripts (tests).
     -   VS Code uses Dedicated Workers since `globalThis` is indicated as a [`DedicatedWorkerGlobalScope`](https://developer.mozilla.org/en-US/docs/Web/API/DedicatedWorkerGlobalScope) when debugging
     -   `globalThis` is one object (that I could find so far) which **is shared** between our extension and test scripts. A guess to why is that the main script spawns another web worker (for unit tests) and passes on the `DedicatedWorkerGlobalScope`. See [`"Workers can also spawn other workers"`](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Functions_and_classes_available_to_workers).
     -   `globalThis` returns `global` in Node.js, or a `WorkerGlobalScope` in the browser
+    -   NOTE: `globalThis` is shared across all of VS Code, including all extensions.

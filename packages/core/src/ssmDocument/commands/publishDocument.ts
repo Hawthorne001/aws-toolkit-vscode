@@ -12,7 +12,11 @@ import { ssmJson, ssmYaml } from '../../shared/constants'
 
 import * as localizedText from '../../shared/localizedText'
 import { getLogger, Logger } from '../../shared/logger'
-import { PublishSSMDocumentWizard, PublishSSMDocumentWizardResponse } from '../wizards/publishDocumentWizard'
+import {
+    PublishSSMDocumentAction,
+    PublishSSMDocumentWizard,
+    PublishSSMDocumentWizardResponse,
+} from '../wizards/publishDocumentWizard'
 import { showConfirmationMessage } from '../util/util'
 import { telemetry } from '../../shared/telemetry/telemetry'
 import { Result, SsmOperation } from '../../shared/telemetry/telemetry'
@@ -49,9 +53,9 @@ export async function publishSSMDocument(): Promise<void> {
 
     try {
         const response = await new PublishSSMDocumentWizard().run()
-        if (response?.action === 'Create') {
+        if (response?.action === PublishSSMDocumentAction.QuickCreate) {
             await createDocument(response, textDocument)
-        } else if (response?.action === 'Update') {
+        } else if (response?.action === PublishSSMDocumentAction.QuickUpdate) {
             await updateDocument(response, textDocument)
         }
     } catch (err) {
@@ -79,7 +83,7 @@ export async function createDocument(
         }
 
         const createResult = await client.createDocument(request)
-        logger.info(`Created Systems Manager Document: ${JSON.stringify(createResult.DocumentDescription)}`)
+        logger.info(`Created Systems Manager Document: %O`, createResult.DocumentDescription)
         void vscode.window.showInformationMessage(`Created Systems Manager Document: ${wizardResponse.name}`)
     } catch (err) {
         const error = err as Error
@@ -114,7 +118,7 @@ export async function updateDocument(
 
         const updateResult = await client.updateDocument(request)
 
-        logger.info(`Updated Systems Manager Document: ${JSON.stringify(updateResult.DocumentDescription)}`)
+        logger.info(`Updated Systems Manager Document: %O`, updateResult.DocumentDescription)
         void vscode.window.showInformationMessage(`Updated Systems Manager Document: ${wizardResponse.name}`)
 
         const isConfirmed = await showConfirmationMessage({

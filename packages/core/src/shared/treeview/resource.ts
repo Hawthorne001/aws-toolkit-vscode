@@ -61,7 +61,7 @@ export class PageLoader<T> {
     public dispose(): void {
         this.pages.length = 0
         this.isDone = true
-        this.iterator?.return?.().catch(e => {
+        this.iterator?.return?.().catch((e) => {
             getLogger().error('PageLoader.dispose() failed: %s', (e as Error).message)
         })
     }
@@ -94,7 +94,11 @@ interface LoadMoreable<T> {
 }
 
 const loadMore = <T>(controller: LoadMoreable<T>) => controller.loadMore()
-export const loadMoreCommand = Commands.instance.register('_aws.resources.loadMore', loadMore)
+export const loadMoreCommand = Commands.instance.declare(
+    '_aws.resources.loadMore',
+    () => (controller) => loadMore(controller)
+)
+const registerLoadMore = once(() => loadMoreCommand.register())
 
 interface TreeNodeOptions<T> {
     /**
@@ -136,7 +140,12 @@ export class ResourceTreeNode<T extends TreeResource<unknown>, U = never> implem
 
     private loader?: PageLoader<TreeNode<U>>
 
-    public constructor(public readonly resource: T, private readonly options?: TreeNodeOptions<U>) {}
+    public constructor(
+        public readonly resource: T,
+        private readonly options?: TreeNodeOptions<U>
+    ) {
+        registerLoadMore()
+    }
 
     public get onDidChangeChildren() {
         if (this.options?.childrenProvider?.onDidChange || this.options?.childrenProvider?.paginated) {
@@ -153,7 +162,7 @@ export class ResourceTreeNode<T extends TreeResource<unknown>, U = never> implem
         // The two branches are for tree shim optimizations
         const item = this.resource.getTreeItem()
         if (item instanceof Promise) {
-            return item.then(i => {
+            return item.then((i) => {
                 i.collapsibleState = collapsibleState
                 return i
             })

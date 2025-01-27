@@ -29,7 +29,6 @@ import {
     isThirdPartyRepo,
 } from '../../../shared/clients/codecatalystClient'
 import { CancellationError } from '../../../shared/utilities/timeoutUtils'
-import { isCloud9 } from '../../../shared/extensionUtilities'
 import { telemetry } from '../../../shared/telemetry/telemetry'
 import { isNonNullable } from '../../../shared/utilities/tsUtils'
 import { createOrgPrompter, createProjectPrompter } from '../../wizards/selectResource'
@@ -121,7 +120,7 @@ export class CodeCatalystCreateWebview extends VueWebview {
             })
             .flatten()
 
-        const branches = repos.map(r =>
+        const branches = repos.map((r) =>
             this.client
                 .listBranches({
                     spaceName: r.org.name,
@@ -155,7 +154,7 @@ export class CodeCatalystCreateWebview extends VueWebview {
         const subscriptionType = isNonNullable(org)
             ? await this.client
                   .getSubscription({ spaceName: org.name })
-                  .then(resp => (isValidSubscriptionType(resp.subscriptionType) ? resp.subscriptionType : 'FREE'))
+                  .then((resp) => (isValidSubscriptionType(resp.subscriptionType) ? resp.subscriptionType : 'FREE'))
             : 'FREE'
 
         async function prompt(prompter: Prompter<any>) {
@@ -183,7 +182,7 @@ export class CodeCatalystCreateWebview extends VueWebview {
 
     public async submit(settings: DevEnvironmentSettings, source: SourceResponse) {
         const devenv = await this.createDevEnvOfType(settings, source)
-        void this.commands.openDevEnv.execute(devenv)
+        void this.commands.openDevEnv.execute(undefined, devenv)
     }
 
     public async createDevEnvOfType(settings: DevEnvironmentSettings, source: SourceResponse) {
@@ -256,7 +255,7 @@ export async function showCreateDevEnv(
     commands: typeof CodeCatalystCommands.declared
 ): Promise<void> {
     submitPromise ??= new Promise<void>((resolve, reject) => {
-        activePanel ??= new Panel(ctx, client, commands, devenv => {
+        activePanel ??= new Panel(ctx, client, commands, (devenv) => {
             if (devenv === undefined) {
                 reject(new CancellationError('user'))
             } else {
@@ -267,7 +266,7 @@ export async function showCreateDevEnv(
 
     const webview = await activePanel!.show({
         title: localize('AWS.view.createDevEnv.title', 'Create a CodeCatalyst Dev Environment'),
-        viewColumn: isCloud9() ? vscode.ViewColumn.One : vscode.ViewColumn.Active,
+        viewColumn: vscode.ViewColumn.Active,
     })
 
     if (!subscriptions) {

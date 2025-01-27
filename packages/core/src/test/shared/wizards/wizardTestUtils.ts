@@ -65,9 +65,7 @@ function failIf(cond: boolean, message?: string): void {
 export async function createWizardTester<T extends Partial<T>>(wizard: Wizard<T> | WizardForm<T>): Promise<Tester<T>> {
     if (wizard instanceof Wizard && wizard.init) {
         // Ensure that init() was called. Needed because createWizardTester() does not call run().
-        ;(wizard as any)._ready = true
         await wizard.init()
-        delete wizard.init
     }
 
     const form = wizard instanceof Wizard ? wizard.boundForm : wizard
@@ -86,11 +84,11 @@ export async function createWizardTester<T extends Partial<T>>(wizard: Wizard<T>
     }
 
     function showableChildren(parent: string): string[] {
-        return form.properties.filter(prop => prop !== parent && prop.startsWith(parent) && canShowPrompter(prop))
+        return form.properties.filter((prop) => prop !== parent && prop.startsWith(parent) && canShowPrompter(prop))
     }
 
     function getRelativeOrder(prop: string): number {
-        return form.properties.filter(prop => canShowPrompter(prop)).indexOf(prop)
+        return form.properties.filter((prop) => canShowPrompter(prop)).indexOf(prop)
     }
 
     function assertOrder(prop: string, expected: number): void {
@@ -113,7 +111,7 @@ export async function createWizardTester<T extends Partial<T>>(wizard: Wizard<T>
     function assertShowNone(prop: string): MockWizardFormElement<T>['assertDoesNotShowAny'] {
         return () => {
             const children = showableChildren(prop)
-            const message = children.map(p => p.replace(`${prop}.`, '')).join('\n\t')
+            const message = children.map((p) => p.replace(`${prop}.`, '')).join('\n\t')
 
             failIf(children.length !== 0, `Property "${prop}" would show the following:\n\t${message}`)
         }
@@ -156,15 +154,21 @@ export async function createWizardTester<T extends Partial<T>>(wizard: Wizard<T>
                                     `No properties of "${propPath}" would be shown`
                                 )
                         case NOT_ASSERT_SHOW:
-                            return () =>
-                                failIf(form.canShowProperty(propPath, state), `Property "${propPath}" would be shown`)
+                            return async () =>
+                                failIf(
+                                    await form.canShowProperty(propPath, state),
+                                    `Property "${propPath}" would be shown`
+                                )
                         case NOT_ASSERT_SHOW_ANY:
                             return assertShowNone(propPath)
                         case ASSERT_VALUE:
                             return assertValue(propPath)
                         case SHOW_COUNT:
                             return (count: number) =>
-                                assert.strictEqual(form.properties.filter(prop => canShowPrompter(prop)).length, count)
+                                assert.strictEqual(
+                                    form.properties.filter((prop) => canShowPrompter(prop)).length,
+                                    count
+                                )
                         default:
                             return Reflect.get(obj, prop, rec) ?? createFormWrapper([...path, prop.toString()])
                     }

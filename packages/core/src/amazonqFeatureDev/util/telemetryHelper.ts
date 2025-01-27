@@ -3,11 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { globals } from '../../shared'
 import { getLogger } from '../../shared/logger/logger'
-import { AmazonqApproachInvoke, AmazonqCodeGenerationInvoke, Metric } from '../../shared/telemetry/telemetry'
+import { AmazonqApproachInvoke, AmazonqCodeGenerationInvoke, Span } from '../../shared/telemetry/telemetry'
 import { LLMResponseType } from '../types'
-
-const performance = globalThis.performance ?? require('perf_hooks').performance
 
 export class TelemetryHelper {
     public generateApproachIteration: number
@@ -33,7 +32,7 @@ export class TelemetryHelper {
     }
 
     public recordUserApproachTelemetry(
-        span: Metric<AmazonqApproachInvoke>,
+        span: Span<AmazonqApproachInvoke>,
         amazonqConversationId: string,
         responseType: LLMResponseType
     ) {
@@ -43,11 +42,13 @@ export class TelemetryHelper {
             amazonqGenerateApproachLatency: performance.now() - this.generateApproachLastInvocationTime,
             amazonqGenerateApproachResponseType: responseType,
         }
-        getLogger().debug(`recordUserApproachTelemetry: %O`, event)
+        if (globals.telemetry.telemetryEnabled) {
+            getLogger().debug(`recordUserApproachTelemetry: %O`, event)
+        }
         span.record(event)
     }
 
-    public recordUserCodeGenerationTelemetry(span: Metric<AmazonqCodeGenerationInvoke>, amazonqConversationId: string) {
+    public recordUserCodeGenerationTelemetry(span: Span<AmazonqCodeGenerationInvoke>, amazonqConversationId: string) {
         const event = {
             amazonqConversationId,
             amazonqGenerateCodeIteration: this.generateCodeIteration,

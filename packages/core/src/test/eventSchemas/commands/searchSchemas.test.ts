@@ -116,11 +116,11 @@ describe('Search Schemas', function () {
             const client = stub(DefaultSchemaClient, { regionCode: 'region-1' })
             const displayMessage = `Unable to search registry ${failRegistry}`
 
-            //make an api call with non existent registryName - should return empty results
+            // make an api call with non existent registryName - should return empty results
             const results = await getSearchListForSingleRegistry(client, failRegistry, 'randomText')
 
             assert.strictEqual(results.length, 0, 'should return 0 summaries')
-            const errorMessages = getTestWindow().shownMessages.filter(m => m.severity === SeverityLevel.Error)
+            const errorMessages = getTestWindow().shownMessages.filter((m) => m.severity === SeverityLevel.Error)
             assert.strictEqual(errorMessages.length, 1, 'error message should be shown exactly once')
             assert.strictEqual(errorMessages[0].message, displayMessage, 'should display correct error message')
         })
@@ -145,7 +145,7 @@ describe('Search Schemas', function () {
 
             assert.strictEqual(results.length, 3, 'should return 3 summaries')
 
-            //results are unordered, sort for testing purposes
+            // results are unordered, sort for testing purposes
             results.sort(function (a, b) {
                 return a.RegistryName > b.RegistryName ? 1 : b.RegistryName > a.RegistryName ? -1 : 0
             })
@@ -165,8 +165,8 @@ describe('Search Schemas', function () {
             assert.strictEqual(results[1].VersionList.length, 1, 'second summary has 1 version')
             assert.strictEqual(results[2].VersionList.length, 1, 'third summary has 1 version')
 
-            //failed registries
-            const errorMessages = getTestWindow().shownMessages.filter(m => m.severity === SeverityLevel.Error)
+            // failed registries
+            const errorMessages = getTestWindow().shownMessages.filter((m) => m.severity === SeverityLevel.Error)
             assert.strictEqual(errorMessages.length, 2, 'should display 2 error message, 1 per each failed registry')
             errorMessages[0].assertMessage(displayMessage)
             errorMessages[1].assertMessage(displayMessage2)
@@ -278,7 +278,7 @@ describe('Search Schemas', function () {
             const results = await getRegistryNames(schemasNode, schemaClient)
 
             assert.ok(results.length === 0, 'Should return an empty array')
-            const errorMessages = getTestWindow().shownMessages.filter(m => m.severity === SeverityLevel.Error)
+            const errorMessages = getTestWindow().shownMessages.filter((m) => m.severity === SeverityLevel.Error)
             assert.strictEqual(errorMessages.length, 1, 'should display 1 error message')
             errorMessages[0].assertMessage('Error loading Schemas resources')
         })

@@ -10,6 +10,7 @@ import { AmazonQAppInitContext } from '../amazonq/apps/initContext'
 import { MessageListener } from '../amazonq/messages/messageListener'
 import { MessagePublisher } from '../amazonq/messages/messagePublisher'
 import {
+    ViewDiff,
     ChatItemFeedbackMessage,
     ChatItemVotedMessage,
     CopyCodeToClipboard,
@@ -24,9 +25,9 @@ import {
     TabCreatedMessage,
     TriggerTabIDReceived,
     UIFocusMessage,
+    AcceptDiff,
 } from './controllers/chat/model'
 import { EditorContextCommand, registerCommands } from './commands/registerCommands'
-import { OnboardingPageInteraction } from '../amazonq/onboardingPage/model'
 
 export function init(appContext: AmazonQAppInitContext) {
     const cwChatControllerEventEmitters = {
@@ -35,6 +36,8 @@ export function init(appContext: AmazonQAppInitContext) {
         processTabClosedMessage: new EventEmitter<TabClosedMessage>(),
         processTabChangedMessage: new EventEmitter<TabChangedMessage>(),
         processInsertCodeAtCursorPosition: new EventEmitter<InsertCodeAtCursorPosition>(),
+        processAcceptDiff: new EventEmitter<AcceptDiff>(),
+        processViewDiff: new EventEmitter<ViewDiff>(),
         processCopyCodeToClipboard: new EventEmitter<CopyCodeToClipboard>(),
         processContextMenuCommand: new EventEmitter<EditorContextCommand>(),
         processTriggerTabIDReceived: new EventEmitter<TriggerTabIDReceived>(),
@@ -42,7 +45,6 @@ export function init(appContext: AmazonQAppInitContext) {
         processChatItemVotedMessage: new EventEmitter<ChatItemVotedMessage>(),
         processChatItemFeedbackMessage: new EventEmitter<ChatItemFeedbackMessage>(),
         processUIFocusMessage: new EventEmitter<UIFocusMessage>(),
-        processOnboardingPageInteraction: new EventEmitter<OnboardingPageInteraction>(),
         processSourceLinkClick: new EventEmitter<SourceLinkClickMessage>(),
         processResponseBodyLinkClick: new EventEmitter<ResponseBodyLinkClickMessage>(),
         processFooterInfoLinkClick: new EventEmitter<FooterInfoLinkClick>(),
@@ -64,6 +66,8 @@ export function init(appContext: AmazonQAppInitContext) {
         processInsertCodeAtCursorPosition: new MessageListener<InsertCodeAtCursorPosition>(
             cwChatControllerEventEmitters.processInsertCodeAtCursorPosition
         ),
+        processAcceptDiff: new MessageListener<AcceptDiff>(cwChatControllerEventEmitters.processAcceptDiff),
+        processViewDiff: new MessageListener<ViewDiff>(cwChatControllerEventEmitters.processViewDiff),
         processCopyCodeToClipboard: new MessageListener<CopyCodeToClipboard>(
             cwChatControllerEventEmitters.processCopyCodeToClipboard
         ),
@@ -83,9 +87,6 @@ export function init(appContext: AmazonQAppInitContext) {
             cwChatControllerEventEmitters.processChatItemFeedbackMessage
         ),
         processUIFocusMessage: new MessageListener<UIFocusMessage>(cwChatControllerEventEmitters.processUIFocusMessage),
-        processOnboardingPageInteraction: new MessageListener<OnboardingPageInteraction>(
-            cwChatControllerEventEmitters.processOnboardingPageInteraction
-        ),
         processSourceLinkClick: new MessageListener<SourceLinkClickMessage>(
             cwChatControllerEventEmitters.processSourceLinkClick
         ),
@@ -113,6 +114,8 @@ export function init(appContext: AmazonQAppInitContext) {
         processInsertCodeAtCursorPosition: new MessagePublisher<InsertCodeAtCursorPosition>(
             cwChatControllerEventEmitters.processInsertCodeAtCursorPosition
         ),
+        processAcceptDiff: new MessagePublisher<AcceptDiff>(cwChatControllerEventEmitters.processAcceptDiff),
+        processViewDiff: new MessagePublisher<ViewDiff>(cwChatControllerEventEmitters.processViewDiff),
         processCopyCodeToClipboard: new MessagePublisher<CopyCodeToClipboard>(
             cwChatControllerEventEmitters.processCopyCodeToClipboard
         ),
@@ -133,9 +136,6 @@ export function init(appContext: AmazonQAppInitContext) {
         ),
         processUIFocusMessage: new MessagePublisher<UIFocusMessage>(
             cwChatControllerEventEmitters.processUIFocusMessage
-        ),
-        processOnboardingPageInteraction: new MessagePublisher<OnboardingPageInteraction>(
-            cwChatControllerEventEmitters.processOnboardingPageInteraction
         ),
         processSourceLinkClick: new MessagePublisher<SourceLinkClickMessage>(
             cwChatControllerEventEmitters.processSourceLinkClick

@@ -36,11 +36,11 @@ export async function getOpenFilesInWindow(
 
     try {
         const tabArrays = vscode.window.tabGroups.all
-        tabArrays.forEach(tabArray => {
-            tabArray.tabs.forEach(tab => {
+        for (const tabArray of tabArrays) {
+            for (const tab of tabArray.tabs) {
                 filesOpenedInEditor.push((tab.input as any).uri.fsPath)
-            })
-        })
+            }
+        }
     } catch (e) {
         // Older versions of VSC do not have the tab API
     }
@@ -49,14 +49,32 @@ export async function getOpenFilesInWindow(
         // since we are not able to use async predicate in array.filter
         // return filesOpenedInEditor.filter(async filePath => await filterPredicate(filePath))
         const resultsWithNulls = await Promise.all(
-            filesOpenedInEditor.map(async file => {
+            filesOpenedInEditor.map(async (file) => {
                 const aResult = await filterPredicate(file)
                 return aResult ? file : undefined
             })
         )
 
-        return resultsWithNulls.filter(item => item !== undefined) as string[]
+        return resultsWithNulls.filter((item) => item !== undefined) as string[]
     } else {
         return filesOpenedInEditor
     }
+}
+
+/**
+ * Disposes of resources (content provider) when the temporary diff editor is closed.
+ *
+ * @param {vscode.Uri} tempFileUri - The URI of the temporary file used for diff comparison.
+ * @param {vscode.Disposable} disposable - The disposable resource to be cleaned up (e.g., content provider).
+ */
+export function disposeOnEditorClose(tempFileUri: vscode.Uri, disposable: vscode.Disposable) {
+    vscode.window.onDidChangeVisibleTextEditors(() => {
+        if (
+            !vscode.window.visibleTextEditors.some(
+                (editor) => editor.document.uri.toString() === tempFileUri.toString()
+            )
+        ) {
+            disposable.dispose()
+        }
+    })
 }

@@ -12,13 +12,13 @@ import { MessageListener } from '../amazonq/messages/messageListener'
 import { fromQueryToParameters } from '../shared/utilities/uriUtils'
 import { getLogger } from '../shared/logger'
 import { TabIdNotFoundError } from './errors'
-import { featureDevScheme } from './constants'
-import { Messenger } from './controllers/chat/messenger/messenger'
-import { AppToWebViewMessageDispatcher } from './views/connector/connector'
+import { featureDevChat, featureDevScheme } from './constants'
 import globals from '../shared/extensionGlobals'
-import { ChatSessionStorage } from './storages/chatSession'
-import { AuthUtil, getChatAuthState } from '../codewhisperer/util/authUtil'
+import { FeatureDevChatSessionStorage } from './storages/chatSession'
+import { AuthUtil } from '../codewhisperer/util/authUtil'
 import { debounce } from 'lodash'
+import { Messenger } from '../amazonq/commons/connector/baseMessenger'
+import { AppToWebViewMessageDispatcher } from '../amazonq/commons/connector/connectorMessages'
 
 export function init(appContext: AmazonQAppInitContext) {
     const featureDevChatControllerEventEmitters: ChatControllerEventEmitters = {
@@ -26,6 +26,7 @@ export function init(appContext: AmazonQAppInitContext) {
         followUpClicked: new vscode.EventEmitter<any>(),
         openDiff: new vscode.EventEmitter<any>(),
         processChatItemVotedMessage: new vscode.EventEmitter<any>(),
+        processChatItemFeedbackMessage: new vscode.EventEmitter<any>(),
         stopResponse: new vscode.EventEmitter<any>(),
         tabOpened: new vscode.EventEmitter<any>(),
         tabClosed: new vscode.EventEmitter<any>(),
@@ -33,10 +34,14 @@ export function init(appContext: AmazonQAppInitContext) {
         processResponseBodyLinkClick: new vscode.EventEmitter<any>(),
         insertCodeAtPositionClicked: new vscode.EventEmitter<any>(),
         fileClicked: new vscode.EventEmitter<any>(),
+        storeCodeResultMessageId: new vscode.EventEmitter<any>(),
     }
 
-    const messenger = new Messenger(new AppToWebViewMessageDispatcher(appContext.getAppsToWebViewMessagePublisher()))
-    const sessionStorage = new ChatSessionStorage(messenger)
+    const messenger = new Messenger(
+        new AppToWebViewMessageDispatcher(appContext.getAppsToWebViewMessagePublisher()),
+        featureDevChat
+    )
+    const sessionStorage = new FeatureDevChatSessionStorage(messenger)
 
     new FeatureDevController(
         featureDevChatControllerEventEmitters,
@@ -52,7 +57,7 @@ export function init(appContext: AmazonQAppInitContext) {
             const tabID = params.get('tabID')
             if (!tabID) {
                 getLogger().error(`Unable to find tabID from ${uri.toString()}`)
-                throw new TabIdNotFoundError(uri.toString())
+                throw new TabIdNotFoundError()
             }
 
             const session = await sessionStorage.getSession(tabID)
@@ -82,15 +87,17 @@ export function init(appContext: AmazonQAppInitContext) {
     )
 
     const debouncedEvent = debounce(async () => {
-        const authenticated = (await getChatAuthState()).amazonQ === 'connected'
+        const authenticated = (await AuthUtil.instance.getChatAuthState()).amazonQ === 'connected'
         let authenticatingSessionIDs: string[] = []
         if (authenticated) {
             const authenticatingSessions = sessionStorage.getAuthenticatingSessions()
 
-            authenticatingSessionIDs = authenticatingSessions.map(session => session.tabID)
+            authenticatingSessionIDs = authenticatingSessions.map((session) => session.tabID)
 
             // We've already authenticated these sessions
-            authenticatingSessions.forEach(session => (session.isAuthenticating = false))
+            for (const session of authenticatingSessions) {
+                session.isAuthenticating = false
+            }
         }
 
         messenger.sendAuthenticationUpdate(authenticated, authenticatingSessionIDs)

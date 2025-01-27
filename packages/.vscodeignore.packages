@@ -19,8 +19,8 @@
 !types/**
 !package.json
 !package.nls.json
+!package.nls.*.json
 
-# Automatically copied from root project directory
 !quickStart**
 !README.**
 !CHANGELOG.md

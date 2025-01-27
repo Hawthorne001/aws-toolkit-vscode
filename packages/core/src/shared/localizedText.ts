@@ -4,7 +4,7 @@
  */
 
 import * as nls from 'vscode-nls'
-import { getIdeProperties } from './extensionUtilities'
+import { commandsPrefix, getIdeProperties } from './extensionUtilities'
 const localize = nls.loadMessageBundle()
 
 export const yes = localize('AWS.generic.response.yes', 'Yes')
@@ -26,12 +26,17 @@ export const dontShow = localize('aws.generic.doNotShowAgain', "Don't Show Again
 export const loadMore = localize('AWS.generic.loadMore', 'Load More')
 export const learnMore = localize('AWS.generic.learnMore', 'Learn More')
 export const proceed = localize('AWS.generic.proceed', 'Proceed')
+export const connect = localize('AWS.auth.connect', 'Connect with AWS')
+export const reauthenticate = localize('AWS.auth.reauthenticate', 'Re-authenticate')
+export function connectionExpired(name: string) {
+    return localize('AWS.auth.expired', `Your ${name} connection has expired. Please re-authenticate.`)
+}
 
 export const checklogs = () =>
     localize(
         'AWS.error.check.logs',
-        'Check the logs by running the "View {0} Toolkit Logs" command from the {1}.',
-        getIdeProperties().company,
+        'Check the logs by running the "{0}: View Logs" command from the {1}.',
+        commandsPrefix(),
         getIdeProperties().commandPalette
     )
 

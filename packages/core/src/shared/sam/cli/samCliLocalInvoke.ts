@@ -3,24 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as child_process from 'child_process'
+import { SpawnOptions } from 'child_process' // eslint-disable-line no-restricted-imports
 import { pushIf } from '../../utilities/collectionUtils'
 import * as nls from 'vscode-nls'
-import { fileExists } from '../../filesystemUtilities'
-import { getLogger, Logger } from '../../logger'
-import { ChildProcess } from '../../utilities/childProcess'
+import { getLogger, getDebugConsoleLogger, Logger } from '../../logger'
+import { ChildProcess } from '../../utilities/processUtils'
 import { Timeout } from '../../utilities/timeoutUtils'
 import { removeAnsi } from '../../utilities/textUtilities'
 import * as vscode from 'vscode'
 import globals from '../../extensionGlobals'
 import { SamCliSettings } from './samCliSettings'
 import { addTelemetryEnvVar, collectSamErrors, SamCliError } from './samCliInvokerUtils'
+import { fs } from '../../fs/fs'
 
 const localize = nls.loadMessageBundle()
 
 export const waitForDebuggerMessages = {
     PYTHON: 'Debugger waiting for client...',
-    PYTHON_IKPDB: 'IKP3db listening on',
     NODEJS: 'Debugger listening on',
     DOTNET: 'Waiting for the debugger to attach...',
     GO_DELVE: 'launching process with args', // Comes from https://github.com/go-delve/delve/blob/f5d2e132bca763d222680815ace98601c2396517/service/debugger/debugger.go#L187
@@ -30,7 +29,7 @@ export const waitForDebuggerMessages = {
 export interface SamLocalInvokeCommandArgs {
     command: string
     args: string[]
-    options?: child_process.SpawnOptions
+    options?: SpawnOptions
     /** Wait until strings specified in `debuggerAttachCues` appear in the process output.  */
     waitForCues: boolean
     timeout?: Timeout
@@ -62,7 +61,7 @@ export class DefaultSamLocalInvokeCommand implements SamLocalInvokeCommand {
         const childProcess = new ChildProcess(params.command, params.args, {
             spawnOptions: await addTelemetryEnvVar(options),
         })
-        getLogger('channel').info('AWS.running.command', 'Command: {0}', `${childProcess}`)
+        getLogger().info('AWS.running.command: Command: %O', childProcess)
         // "sam local invoke", "sam local start-api", etc.
         const samCommandName = `sam ${params.args[0]} ${params.args[1]}`
 
@@ -74,19 +73,19 @@ export class DefaultSamLocalInvokeCommand implements SamLocalInvokeCommand {
                     rejectOnError: true,
                     timeout: params.timeout,
                     onStdout: (text: string): void => {
-                        getLogger('debugConsole').info(text, { raw: true })
+                        getDebugConsoleLogger().info(text, { raw: true })
                         // If we have a timeout (as we do on debug) refresh the timeout as we receive text
                         params.timeout?.refresh()
                         this.logger.verbose('SAM: pid %d: stdout: %s', childProcess.pid(), removeAnsi(text))
                     },
                     onStderr: (text: string): void => {
-                        getLogger('debugConsole').info(text, { raw: true })
+                        getDebugConsoleLogger().info(text, { raw: true })
                         // If we have a timeout (as we do on debug) refresh the timeout as we receive text
                         params.timeout?.refresh()
                         this.logger.verbose('SAM: pid %d: stderr: %s', childProcess.pid(), removeAnsi(text))
                         if (checkForCues) {
                             // Look for messages like "Debugger attached" before returning back to caller
-                            if (this.debuggerAttachCues.some(cue => text.includes(cue))) {
+                            if (this.debuggerAttachCues.some((cue) => text.includes(cue))) {
                                 this.logger.verbose(
                                     `SAM: pid ${childProcess.pid()}: local SAM app is ready for debugger to attach`
                                 )
@@ -96,8 +95,8 @@ export class DefaultSamLocalInvokeCommand implements SamLocalInvokeCommand {
                         }
                     },
                 })
-                .catch(error => {
-                    getLogger('channel').error(
+                .catch((error) => {
+                    getLogger().error(
                         localize('AWS.samcli.error', 'Error running command "{0}": {1}', samCommandName, error.message)
                     )
                     reject(error)
@@ -139,7 +138,7 @@ export class DefaultSamLocalInvokeCommand implements SamLocalInvokeCommand {
                     getLogger().debug('forcing disconnect of debugger session "%s"', debugSession.name)
                     debugSession.customRequest('disconnect').then(
                         () => undefined,
-                        e =>
+                        (e) =>
                             getLogger().warn(
                                 'failed to disconnect debugger session "%s": %s',
                                 debugSession.name,
@@ -216,6 +215,8 @@ export interface SamCliLocalInvokeInvocationArguments {
     extraArgs?: string[]
     /** Debug session name */
     name?: string
+    /** AWS region */
+    region?: string
 }
 
 /**
@@ -230,7 +231,6 @@ export class SamCliLocalInvokeInvocation {
 
     public async execute(timeout?: Timeout): Promise<ChildProcess> {
         await this.validate()
-
         const sam = await this.config.getOrDetectSamCli()
         if (!sam.path) {
             getLogger().warn('SAM CLI not found and not configured')
@@ -256,6 +256,7 @@ export class SamCliLocalInvokeInvocation {
         pushIf(invokeArgs, !!this.args.debuggerPath, '--debugger-path', this.args.debuggerPath!)
         pushIf(invokeArgs, !!this.args.debugArgs, '--debug-args', ...(this.args.debugArgs ?? []))
         pushIf(invokeArgs, !!this.args.containerEnvFile, '--container-env-vars', this.args.containerEnvFile)
+        pushIf(invokeArgs, !!this.args.region, '--region', this.args.region)
 
         pushIf(
             invokeArgs,
@@ -285,11 +286,11 @@ export class SamCliLocalInvokeInvocation {
             throw new Error('template resource name is missing or empty')
         }
 
-        if (!(await fileExists(this.args.templatePath))) {
+        if (!(await fs.exists(this.args.templatePath))) {
             throw new Error(`template path does not exist: ${this.args.templatePath}`)
         }
 
-        if (this.args.eventPath !== undefined && !(await fileExists(this.args.eventPath))) {
+        if (this.args.eventPath !== undefined && !(await fs.exists(this.args.eventPath))) {
             throw new Error(`event path does not exist: ${this.args.eventPath}`)
         }
     }

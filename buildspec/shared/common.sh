@@ -6,13 +6,13 @@
 
 # Ignore these patterns when deciding if the build should fail.
 #   - "waiting for browser": from `ssoAccessTokenProvider.test.ts`, unclear how to fix it.
-#   - "Webview is disposed": only happens on vscode "minimum" (1.68.0)
 #   - "HTTPError: Response code …": caused by github rate-limiting.
 #   - "npm WARN deprecated querystring": transitive dep of aws sdk v2 (check `npm ls querystring`), so that's blocked until we migrate to v3.
-_ignore_pat='Timed-out waiting for browser login flow\|HTTPError: Response code 403\|HTTPError: Response code 404\|npm WARN deprecated querystring'
-if [ "$VSCODE_TEST_VERSION" = 'minimum' ]; then
-    _ignore_pat="$_ignore_pat"'\|Webview is disposed'
-fi
+_ignore_pat='HTTPError: Response code 403\|HTTPError: Response code 404\|npm WARN deprecated querystring\|npm WARN deprecated'
+
+# Do not print (noisy) lines matching these patterns.
+#   - "ERROR:bus… Failed to connect to the bus": noise related to "xvfb". https://github.com/cypress-io/cypress/issues/19299
+_discard_pat='ERROR:bus.cc\|ERROR:viz_main_impl.cc\|ERROR:command_buffer_proxy_impl.cc'
 
 # Expects stdin + two args:
 #   1: error code to return on failure
@@ -27,7 +27,7 @@ run_and_report() {
     local msg="${3}"
     local r=0
     mkfifo testout
-    (cat testout &)
+    (grep -v "$_discard_pat" testout &)
     # Capture messages that we may want to fail (or report) later.
     tee testout \
         | { grep > testout-err --line-buffered -E "$pat" || true; }

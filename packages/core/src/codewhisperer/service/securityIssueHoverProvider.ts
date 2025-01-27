@@ -5,13 +5,16 @@
 import * as vscode from 'vscode'
 import { CodeScanIssue } from '../models/model'
 import globals from '../../shared/extensionGlobals'
-import { SecurityIssueProvider } from './securityIssueProvider'
-import { Component, telemetry } from '../../shared/telemetry/telemetry'
+import { telemetry } from '../../shared/telemetry/telemetry'
 import path from 'path'
 import { AuthUtil } from '../util/authUtil'
+import { TelemetryHelper } from '../util/telemetryHelper'
+import { SecurityIssueProvider } from './securityIssueProvider'
+import { amazonqCodeIssueDetailsTabTitle } from '../models/constants'
 
-export class SecurityIssueHoverProvider extends SecurityIssueProvider implements vscode.HoverProvider {
+export class SecurityIssueHoverProvider implements vscode.HoverProvider {
     static #instance: SecurityIssueHoverProvider
+    private issueProvider: SecurityIssueProvider = SecurityIssueProvider.instance
 
     public static get instance() {
         return (this.#instance ??= new this())
@@ -24,12 +27,15 @@ export class SecurityIssueHoverProvider extends SecurityIssueProvider implements
     ): vscode.Hover {
         const contents: vscode.MarkdownString[] = []
 
-        for (const group of this.issues) {
+        for (const group of this.issueProvider.issues) {
             if (document.fileName !== group.filePath) {
                 continue
             }
 
             for (const issue of group.issues) {
+                if (!issue.visible) {
+                    continue
+                }
                 const range = new vscode.Range(issue.startLine, 0, issue.endLine, 0)
                 if (range.contains(position)) {
                     contents.push(this._getContent(group.filePath, issue))
@@ -40,6 +46,17 @@ export class SecurityIssueHoverProvider extends SecurityIssueProvider implements
                         includesFix: !!issue.suggestedFixes.length,
                         credentialStartUrl: AuthUtil.instance.startUrl,
                     })
+                    TelemetryHelper.instance.sendCodeScanRemediationsEvent(
+                        document.languageId,
+                        'CODESCAN_ISSUE_HOVER',
+                        issue.detectorId,
+                        issue.findingId,
+                        issue.ruleId,
+                        undefined,
+                        undefined,
+                        undefined,
+                        !!issue.suggestedFixes.length
+                    )
                 }
             }
         }
@@ -57,23 +74,56 @@ export class SecurityIssueHoverProvider extends SecurityIssueProvider implements
         const [suggestedFix] = issue.suggestedFixes
 
         markdownString.appendMarkdown(`## ${issue.title} ${this._makeSeverityBadge(issue.severity)}\n`)
-        markdownString.appendMarkdown(`${suggestedFix ? suggestedFix.description : issue.recommendation.text}\n\n`)
-
-        const args = [issue, filePath]
-        const viewDetailsCommand = vscode.Uri.parse(
-            `command:aws.codeWhisperer.openSecurityIssuePanel?${encodeURIComponent(JSON.stringify(args))}`
-        )
-
         markdownString.appendMarkdown(
-            `[$(eye) View Details](${viewDetailsCommand} 'Open "CodeWhisperer Security Issue"')\n`
+            `${suggestedFix?.code && suggestedFix.description !== '' ? suggestedFix.description : issue.recommendation.text}\n\n`
         )
 
-        if (suggestedFix) {
-            const args: [CodeScanIssue, string, Component] = [issue, filePath, 'hover']
-            const applyFixCommand = vscode.Uri.parse(
-                `command:aws.codeWhisperer.applySecurityFix?${encodeURIComponent(JSON.stringify(args))}`
+        const viewDetailsCommand = this._getCommandMarkdown(
+            'aws.amazonq.openSecurityIssuePanel',
+            [issue, filePath],
+            'eye',
+            'View Details',
+            `Open "${amazonqCodeIssueDetailsTabTitle}"`
+        )
+        markdownString.appendMarkdown(viewDetailsCommand)
+
+        const explainWithQCommand = this._getCommandMarkdown(
+            'aws.amazonq.explainIssue',
+            [issue],
+            'comment',
+            'Explain',
+            'Explain with Amazon Q'
+        )
+        markdownString.appendMarkdown(' | ' + explainWithQCommand)
+
+        const ignoreIssueCommand = this._getCommandMarkdown(
+            'aws.amazonq.security.ignore',
+            [issue, filePath, 'hover'],
+            'error',
+            'Ignore',
+            'Ignore Issue'
+        )
+        markdownString.appendMarkdown(' | ' + ignoreIssueCommand)
+
+        const ignoreSimilarIssuesCommand = this._getCommandMarkdown(
+            'aws.amazonq.security.ignoreAll',
+            [issue, 'hover'],
+            'error',
+            'Ignore All',
+            'Ignore Similar Issues'
+        )
+        markdownString.appendMarkdown(' | ' + ignoreSimilarIssuesCommand)
+
+        if (suggestedFix && suggestedFix.code) {
+            const applyFixCommand = this._getCommandMarkdown(
+                'aws.amazonq.applySecurityFix',
+                [issue, filePath, 'hover'],
+                'wrench',
+                'Fix',
+                'Fix with Amazon Q'
             )
-            markdownString.appendMarkdown(` | [$(wrench) Apply Fix](${applyFixCommand} "Apply suggested fix")\n`)
+            markdownString.appendMarkdown(' | ' + applyFixCommand)
+
             markdownString.appendMarkdown('### Suggested Fix Preview\n')
             markdownString.appendMarkdown(
                 `${this._makeCodeBlock(suggestedFix.code, issue.detectorId.split('/').shift())}\n`
@@ -81,6 +131,11 @@ export class SecurityIssueHoverProvider extends SecurityIssueProvider implements
         }
 
         return markdownString
+    }
+
+    private _getCommandMarkdown(command: string, args: any, icon: string, text: string, description: string) {
+        const commandUri = vscode.Uri.parse(`command:${command}?${encodeURIComponent(JSON.stringify(args))}`)
+        return `[$(${icon}) ${text}](${commandUri} '${description}')\n`
     }
 
     private _makeSeverityBadge(severity: string) {
@@ -103,7 +158,7 @@ export class SecurityIssueHoverProvider extends SecurityIssueProvider implements
     private _makeCodeBlock(code: string, language?: string) {
         const lines = code.replaceAll('\n\\ No newline at end of file', '').split('\n')
         const maxLineChars = lines.reduce((acc, curr) => Math.max(acc, curr.length), 0)
-        const paddedLines = lines.map(line => line.padEnd(maxLineChars + 2))
+        const paddedLines = lines.map((line) => line.padEnd(maxLineChars + 2))
 
         // Group the lines into sections so consecutive lines of the same type can be placed in
         // the same span below
@@ -121,15 +176,15 @@ export class SecurityIssueHoverProvider extends SecurityIssueProvider implements
         // Return each section with the correct syntax highlighting and background color
         return sections
             .map(
-                section => `
+                (section) => `
 <span class="codicon codicon-none" style="background-color:var(${
                     section.startsWith('-')
                         ? '--vscode-diffEditor-removedTextBackground'
                         : section.startsWith('+')
-                        ? '--vscode-diffEditor-insertedTextBackground'
-                        : section.startsWith('@@')
-                        ? '--vscode-editorMarkerNavigationInfo-headerBackground'
-                        : '--vscode-diffEditor-unchangedCodeBackground'
+                          ? '--vscode-diffEditor-insertedTextBackground'
+                          : section.startsWith('@@')
+                            ? '--vscode-editorMarkerNavigationInfo-headerBackground'
+                            : '--vscode-diffEditor-unchangedCodeBackground'
                 });">
 
 \`\`\`${section.startsWith('-') || section.startsWith('+') ? 'diff' : section.startsWith('@@') ? undefined : language}
