@@ -12,7 +12,7 @@ import * as vscode from 'vscode'
 import { selectCodeCatalystRepository, selectCodeCatalystResource } from './wizards/selectResource'
 import { openCodeCatalystUrl } from './utils'
 import { CodeCatalystAuthenticationProvider } from './auth'
-import { Commands, placeholder } from '../shared/vscode/commands2'
+import { Commands, VsCodeCommandArg, placeholder } from '../shared/vscode/commands2'
 import { CodeCatalystClient, CodeCatalystResource, createClient } from '../shared/clients/codecatalystClient'
 import { DevEnvironmentId, getConnectedDevEnv, openDevEnv } from './model'
 import { showConfigureDevEnv } from './vue/configure/backend'
@@ -23,9 +23,9 @@ import { telemetry } from '../shared/telemetry/telemetry'
 import { showConfirmationMessage } from '../shared/utilities/messages'
 import { AccountStatus } from '../shared/telemetry/telemetryClient'
 import { CreateDevEnvironmentRequest, UpdateDevEnvironmentRequest } from 'aws-sdk/clients/codecatalyst'
-import { Auth } from '../auth/auth'
 import { SsoConnection } from '../auth/connection'
-import { showManageConnections } from '../auth/ui/vue/show'
+import { isInDevEnv, isRemoteWorkspace } from '../shared/vscode/env'
+import { commandPalette } from '../codewhisperer/commands/types'
 
 /** "List CodeCatalyst Commands" command. */
 export async function listCommands(): Promise<void> {
@@ -142,7 +142,7 @@ function createClientInjector(authProvider: CodeCatalystAuthenticationProvider):
             // TODO: In the future, it would be very nice to open a connection picker here.
             throw new ToolkitError('Not connected to CodeCatalyst', { code: 'NoConnectionBadState' })
         }
-        const validatedConn = await validateConnection(conn, authProvider.auth)
+        const validatedConn = await validateConnection(conn, authProvider)
         const client = await createClient(validatedConn)
         telemetry.record({ userId: client.identity.id })
 
@@ -156,8 +156,11 @@ function createClientInjector(authProvider: CodeCatalystAuthenticationProvider):
  * Provides the user the ability to re-authenticate if needed,
  * otherwise throwing an error.
  */
-async function validateConnection(conn: SsoConnection, auth: Auth): Promise<SsoConnection> {
-    if (auth.getConnectionState(conn) === 'valid') {
+async function validateConnection(
+    conn: SsoConnection,
+    authProvider: CodeCatalystAuthenticationProvider
+): Promise<SsoConnection> {
+    if (authProvider.auth.getConnectionState(conn) === 'valid') {
         return conn
     }
 
@@ -169,10 +172,10 @@ async function validateConnection(conn: SsoConnection, auth: Auth): Promise<SsoC
         throw new ToolkitError('User cancelled login.', { cancelled: true, code: errorCode.invalidConnection })
     }
 
-    conn = await auth.reauthenticate(conn)
+    conn = await authProvider.reauthenticate(conn)
 
     // Log in attempt failed
-    if (auth.getConnectionState(conn) !== 'valid') {
+    if (authProvider.auth.getConnectionState(conn) !== 'valid') {
         throw new ToolkitError('Login failed.', { code: errorCode.invalidConnection })
     }
 
@@ -180,7 +183,7 @@ async function validateConnection(conn: SsoConnection, auth: Auth): Promise<SsoC
 }
 
 function createCommandDecorator(commands: CodeCatalystCommands): CommandDecorator {
-    return command =>
+    return (command) =>
         (...args) =>
             commands.withClient(command, ...args)
 }
@@ -205,6 +208,25 @@ type Inject<T, U> = T extends (...args: infer P) => infer R
 
 type WithClient<T> = Parameters<Inject<T, CodeCatalystClient>>
 
+class RemoteContextError extends ToolkitError {
+    constructor() {
+        super('Cannot connect from a remote context. Try again from a local VS Code instance.', {
+            code: 'ConnectedToRemote',
+        })
+    }
+}
+
+export const codecatalystConnectionsCmd = Commands.declare(
+    'aws.codecatalyst.manageConnections',
+    () => () =>
+        void vscode.commands.executeCommand(
+            'aws.toolkit.auth.manageConnections',
+            placeholder,
+            'codecatalystDeveloperTools',
+            'codecatalyst'
+        )
+)
+
 export class CodeCatalystCommands {
     public readonly withClient: ClientInjector
     public readonly bindClient = createCommandDecorator(this)
@@ -217,11 +239,14 @@ export class CodeCatalystCommands {
         return listCommands()
     }
 
-    public cloneRepository(...args: WithClient<typeof cloneCodeCatalystRepo>) {
+    public cloneRepo(_?: VsCodeCommandArg, ...args: WithClient<typeof cloneCodeCatalystRepo>) {
         return this.withClient(cloneCodeCatalystRepo, ...args)
     }
 
-    public createDevEnv(): Promise<void> {
+    public createDevEnv(_?: VsCodeCommandArg): Promise<void> {
+        if (isRemoteWorkspace() && isInDevEnv()) {
+            throw new RemoteContextError()
+        }
         return this.withClient(showCreateDevEnv, globals.context, CodeCatalystCommands.declared)
     }
 
@@ -264,14 +289,13 @@ export class CodeCatalystCommands {
     }
 
     public async openDevEnv(
+        _?: VsCodeCommandArg,
         id?: DevEnvironmentId,
         targetPath?: string,
         connection?: { startUrl: string; region: string }
     ): Promise<void> {
-        if (vscode.env.remoteName === 'ssh-remote') {
-            throw new ToolkitError('Cannot connect from a remote context. Try again from a local VS Code instance.', {
-                code: 'ConnectedToRemote',
-            })
+        if (isRemoteWorkspace() && isInDevEnv()) {
+            throw new RemoteContextError()
         }
 
         const devenv = id ?? (await this.selectDevEnv())
@@ -282,13 +306,13 @@ export class CodeCatalystCommands {
         // need to be careful of mapping explosion so this granular data would either need
         // to be flattened or we restrict the names to a pre-determined set
         if (id === undefined) {
-            telemetry.record({ source: 'CommandPalette' })
+            telemetry.record({ source: commandPalette })
         }
 
         if (connection !== undefined) {
             await this.authProvider.tryConnectTo(connection)
         } else if (!this.authProvider.isConnectionValid()) {
-            void showManageConnections.execute(placeholder, 'codecatalystDeveloperTools', 'codecatalyst')
+            void codecatalystConnectionsCmd.execute()
             return
         }
 
@@ -311,7 +335,7 @@ export class CodeCatalystCommands {
         return devenv
     }
 
-    public static fromContext(ctx: Pick<vscode.ExtensionContext, 'secrets' | 'globalState'>) {
+    public static fromContext(ctx: Pick<vscode.ExtensionContext, 'secrets'>) {
         const auth = CodeCatalystAuthenticationProvider.fromContext(ctx)
 
         return new this(auth)
@@ -327,7 +351,7 @@ export class CodeCatalystCommands {
         deleteDevEnv: Commands.from(this).declareDeleteDevEnv('aws.codecatalyst.deleteDevEnv'),
         openDevEnvSettings: Commands.from(this).declareOpenDevEnvSettings('aws.codecatalyst.openDevEnvSettings'),
         openDevfile: Commands.from(this).declareOpenDevfile('aws.codecatalyst.openDevfile'),
-        cloneRepo: Commands.from(this).declareCloneRepository({
+        cloneRepo: Commands.from(this).declareCloneRepo({
             id: 'aws.codecatalyst.cloneRepo',
             telemetryName: 'codecatalyst_localClone',
         }),

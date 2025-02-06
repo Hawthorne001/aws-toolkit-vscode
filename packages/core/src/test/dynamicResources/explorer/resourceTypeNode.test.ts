@@ -57,45 +57,47 @@ describe('ResourceTypeNode', function () {
 
         assert.strictEqual(childNodes.length, resourceIdentifiers.length, 'Unexpected child count')
 
-        childNodes.forEach(node => assert.ok(node instanceof ResourceNode, 'Expected child node to be ResourceNode'))
+        for (const node of childNodes) {
+            assert.ok(node instanceof ResourceNode, 'Expected child node to be ResourceNode')
+        }
     })
 
     it('has child nodes with all operations contextValue when unknown operations', async function () {
         const childNodes = await testNode.getChildren()
 
-        childNodes.forEach(node =>
+        for (const node of childNodes) {
             assert.strictEqual(
                 node.contextValue,
                 'CreatableDeletableUpdatableResourceNode',
                 'expected the node to have a ResourceNode contextValue'
             )
-        )
+        }
     })
 
     it('has child nodes with ResourceNode contextValue including single supported operation', async function () {
         testNode = generateTestNode(cloudControl, ['CREATE'])
         const childNodes = await testNode.getChildren()
 
-        childNodes.forEach(node =>
+        for (const node of childNodes) {
             assert.strictEqual(
                 node.contextValue,
                 'CreatableResourceNode',
                 'expected the node to have a CreatableResourceNode contextValue'
             )
-        )
+        }
     })
 
     it('has child nodes with ResourceNode contextValue including multiple supported operations', async function () {
         testNode = generateTestNode(cloudControl, ['CREATE', 'DELETE'])
         const childNodes = await testNode.getChildren()
 
-        childNodes.forEach(node =>
+        for (const node of childNodes) {
             assert.strictEqual(
                 node.contextValue,
                 'CreatableDeletableResourceNode',
                 'expected the node to have a CreatableDeletableResourceNode contextValue'
             )
-        )
+        }
     })
 
     it('sorts child nodes', async function () {
@@ -106,7 +108,7 @@ describe('ResourceTypeNode', function () {
 
         const childNodes = await testNode.getChildren()
 
-        const actualChildOrder = childNodes.map(node => node.label)
+        const actualChildOrder = childNodes.map((node) => node.label)
         assert.deepStrictEqual(actualChildOrder, sortedText, 'Unexpected child sort order')
     })
 
@@ -181,7 +183,7 @@ describe('ResourceTypeNode', function () {
         cloudControl.listResources = sinon.stub().resolves({
             TypeName: fakeTypeName,
             NextToken: undefined,
-            ResourceDescriptions: resourceIdentifiers.map<CloudControl.ResourceDescription>(identifier => {
+            ResourceDescriptions: resourceIdentifiers.map<CloudControl.ResourceDescription>((identifier) => {
                 return {
                     Identifier: identifier,
                     ResourceModel: '',

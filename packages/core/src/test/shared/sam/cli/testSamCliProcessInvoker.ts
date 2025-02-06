@@ -4,7 +4,7 @@
  */
 
 import assert from 'assert'
-import { SpawnOptions } from 'child_process'
+import { SpawnOptions } from 'child_process' // eslint-disable-line no-restricted-imports
 
 import { isError } from 'lodash'
 import {
@@ -12,7 +12,7 @@ import {
     SamCliProcessInvokeOptions,
     SamCliProcessInvoker,
 } from '../../../../shared/sam/cli/samCliInvokerUtils'
-import { ChildProcessResult } from '../../../../shared/utilities/childProcess'
+import { ChildProcessResult } from '../../../../shared/utilities/processUtils'
 import { TestLogger } from '../../../testLogger'
 
 export class TestSamCliProcessInvoker implements SamCliProcessInvoker {
@@ -101,9 +101,9 @@ export async function assertLogContainsBadExitInformation(
 
     const logText = logger
         .getLoggedEntries()
-        .filter(x => !isError(x))
+        .filter((x) => !isError(x))
         .join('\n')
-    expectedTexts.forEach(expectedText => {
+    for (const expectedText of expectedTexts) {
         assert.ok(logText.includes(expectedText.text), expectedText.verifyMessage)
-    })
+    }
 }

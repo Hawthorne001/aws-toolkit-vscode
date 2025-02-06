@@ -42,7 +42,8 @@ export class Timeout {
     private _startTime: number
     private _endTime: number
     private readonly _timeoutLength: number
-    private _timerTimeout: NodeJS.Timeout
+    /** In the browser the timeout is a number */
+    private _timerTimeout: NodeJS.Timeout | number
     private _completionReason?: CancellationAgent | 'completed'
     private readonly _token: TypedCancellationToken
     private readonly _onCancellationRequestedEmitter = new EventEmitter<CancelEvent>()
@@ -66,7 +67,7 @@ export class Timeout {
             get: () => this._completionReason === 'user' || this._completionReason === 'timeout',
         })
 
-        this._timerTimeout = globals.clock.setTimeout(() => this.stop('timeout'), timeoutLength)
+        this._timerTimeout = this.createTimeout()
     }
 
     /**
@@ -95,11 +96,19 @@ export class Timeout {
             return
         }
 
+        // Web mode timeout is a number and does not have a refresh method
+        if (typeof this._timerTimeout === 'number') {
+            globals.clock.clearTimeout(this._timerTimeout)
+            this._timerTimeout = this.createTimeout()
+        } else {
+            // This is a node timeout instance, which has refresh built in
+            this._timerTimeout = this._timerTimeout.refresh()
+        }
+
         // These will not align, but we don't have visibility into a NodeJS.Timeout
         // so remainingtime will be approximate. Timers are approximate anyway and are
         // not highly accurate in when they fire.
         this._endTime = globals.clock.Date.now() + this._timeoutLength
-        this._timerTimeout = this._timerTimeout.refresh()
     }
 
     /**
@@ -114,6 +123,10 @@ export class Timeout {
      */
     public get elapsedTime(): number {
         return (this.completed ? this._endTime : globals.clock.Date.now()) - this._startTime
+    }
+
+    private createTimeout() {
+        return globals.clock.setTimeout(() => this.stop('timeout'), this._timeoutLength)
     }
 
     private stop(type: CancellationAgent | 'completed'): void {
@@ -171,6 +184,34 @@ export class Timeout {
     }
 }
 
+export class Interval {
+    private _setCompleted: (() => void) | undefined
+    private _nextCompletion: Promise<void>
+    private ref: NodeJS.Timer | number | undefined
+
+    constructor(intervalMillis: number, onCompletion: () => Promise<void>) {
+        this._nextCompletion = new Promise<void>((resolve) => {
+            this._setCompleted = () => resolve()
+        })
+        this.ref = globals.clock.setInterval(async () => {
+            await onCompletion()
+            this._setCompleted!()
+            this._nextCompletion = new Promise<void>((resolve) => {
+                this._setCompleted = () => resolve()
+            })
+        }, intervalMillis)
+    }
+
+    /** Allows to wait for the next interval to finish running */
+    public async nextCompletion() {
+        await this._nextCompletion
+    }
+
+    public dispose() {
+        globals.clock.clearInterval(this.ref)
+    }
+}
+
 interface WaitUntilOptions {
     /** Timeout in ms (default: 5000) */
     readonly timeout?: number
@@ -178,40 +219,101 @@ interface WaitUntilOptions {
     readonly interval?: number
     /** Wait for "truthy" result, else wait for any defined result including `false` (default: true) */
     readonly truthy?: boolean
+    /** A backoff multiplier for how long the next interval will be (default: None, i.e 1) */
+    readonly backoff?: number
+    /**
+     * Only retries when an error is thrown, otherwise returning the immediate result.
+     * - 'truthy' arg is ignored
+     * - If the timeout is reached it throws the last error
+     * - default: false
+     */
+    readonly retryOnFail?: boolean
 }
 
+export const waitUntilDefaultTimeout = 2000
+export const waitUntilDefaultInterval = 500
+
 /**
- * Invokes `fn()` until it returns a non-undefined value.
+ * Invokes `fn()` on an interval based on the given arguments. This can be used for retries, or until
+ * an expected result is given. Read {@link WaitUntilOptions} carefully.
  *
  * @param fn  Function whose result is checked
  * @param options  See {@link WaitUntilOptions}
  *
- * @returns Result of `fn()`, or `undefined` if timeout was reached.
+ * @returns Result of `fn()`, or possibly `undefined` depending on the arguments.
  */
+export async function waitUntil<T>(fn: () => Promise<T>, options: WaitUntilOptions & { retryOnFail: true }): Promise<T>
+export async function waitUntil<T>(
+    fn: () => Promise<T>,
+    options: WaitUntilOptions & { retryOnFail: false }
+): Promise<T | undefined>
+export async function waitUntil<T>(
+    fn: () => Promise<T>,
+    options: Omit<WaitUntilOptions, 'retryOnFail'>
+): Promise<T | undefined>
 export async function waitUntil<T>(fn: () => Promise<T>, options: WaitUntilOptions): Promise<T | undefined> {
-    const opt = { timeout: 5000, interval: 500, truthy: true, ...options }
+    // set default opts
+    const opt = {
+        timeout: waitUntilDefaultTimeout,
+        interval: waitUntilDefaultInterval,
+        truthy: true,
+        backoff: 1,
+        retryOnFail: false,
+        ...options,
+    }
+
+    let interval = opt.interval
+    let lastError: Error | undefined
+    let elapsed: number = 0
+    let remaining = opt.timeout
+
     for (let i = 0; true; i++) {
         const start: number = globals.clock.Date.now()
         let result: T
 
-        // Needed in case a caller uses a 0 timeout (function is only called once)
-        if (opt.timeout > 0) {
-            result = await Promise.race([fn(), new Promise<T>(r => globals.clock.setTimeout(r, opt.timeout))])
-        } else {
-            result = await fn()
+        try {
+            // Needed in case a caller uses a 0 timeout (function is only called once)
+            if (remaining > 0) {
+                result = await Promise.race([fn(), new Promise<T>((r) => globals.clock.setTimeout(r, remaining))])
+            } else {
+                result = await fn()
+            }
+
+            if (opt.retryOnFail || (opt.truthy && result) || (!opt.truthy && result !== undefined)) {
+                return result
+            }
+        } catch (e) {
+            if (!opt.retryOnFail) {
+                throw e
+            }
+
+            // Unlikely to hit this, but exists for typing
+            if (!(e instanceof Error)) {
+                throw e
+            }
+
+            lastError = e
         }
 
         // Ensures that we never overrun the timeout
-        opt.timeout -= globals.clock.Date.now() - start
+        remaining -= globals.clock.Date.now() - start
 
-        if ((opt.truthy && result) || (!opt.truthy && result !== undefined)) {
-            return result
-        }
-        if (i * opt.interval >= opt.timeout) {
-            return undefined
+        // If the sleep will exceed the timeout, abort early
+        if (elapsed + interval >= remaining) {
+            if (!opt.retryOnFail) {
+                return undefined
+            }
+
+            throw lastError
         }
 
-        await sleep(opt.interval)
+        // when testing, this avoids the need to progress the stubbed clock
+        if (interval > 0) {
+            await sleep(interval)
+        }
+
+        elapsed += interval
+        interval = interval * opt.backoff
     }
 }
 
@@ -246,7 +348,7 @@ export async function waitTimeout<T, R = void, B extends boolean = true>(
     }
 
     const result = await Promise.race([promise, timeout.promisify()])
-        .catch(e => (e instanceof Error ? e : new Error(`unknown error: ${e}`)))
+        .catch((e) => (e instanceof Error ? e : new Error(`unknown error: ${e}`)))
         .finally(() => {
             if ((opt.completeTimeout ?? true) === true) {
                 timeout.dispose()
@@ -277,5 +379,5 @@ export async function waitTimeout<T, R = void, B extends boolean = true>(
  */
 export function sleep(duration: number = 0): Promise<void> {
     const schedule = globals?.clock?.setTimeout ?? setTimeout
-    return new Promise(r => schedule(r, Math.max(duration, 0)))
+    return new Promise((r) => schedule(r, Math.max(duration, 0)))
 }

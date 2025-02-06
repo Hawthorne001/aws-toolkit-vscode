@@ -33,7 +33,9 @@ import * as localizedText from '../../shared/localizedText'
 import { DefaultStsClient } from '../../shared/clients/stsClient'
 import { findAsync } from '../../shared/utilities/collectionUtils'
 import { telemetry } from '../../shared/telemetry/telemetry'
+import { withTelemetryContext } from '../../shared/telemetry/util'
 
+const loginManagerClassName = 'LoginManager'
 /**
  * @deprecated Replaced by `Auth` in `src/credentials/auth.ts`
  */
@@ -131,6 +133,7 @@ export class LoginManager {
 
     private static didTryAutoConnect = false
 
+    @withTelemetryContext({ name: 'tryAutoConnect', class: loginManagerClassName })
     public static async tryAutoConnect(awsContext: AwsContext = globals.awsContext): Promise<boolean> {
         if (isAutomation()) {
             return false
@@ -181,7 +184,7 @@ export async function loginWithMostRecentCredentials(
             }
             getLogger().info('autoconnect: connected: %O', asString(creds))
             if (popup) {
-                await vscode.window.showInformationMessage(
+                void vscode.window.showInformationMessage(
                     localize(
                         'AWS.message.credentials.connected',
                         'Connected to {0} with {1}',
@@ -214,8 +217,8 @@ export async function loginWithMostRecentCredentials(
     const defaultProfile = profileNames.includes(defaultName)
         ? defaultName
         : profileNames.length === 1
-        ? profileNames[0]
-        : undefined
+          ? profileNames[0]
+          : undefined
 
     if (!previousCredentialsId && profileNames.length === 0) {
         await loginManager.logout(true)
@@ -232,7 +235,7 @@ export async function loginWithMostRecentCredentials(
     }
 
     // Try to auto-connect any other non-default profile (useful for env vars, IMDS, Cloud9, ECS, …).
-    const nonDefault = await findAsync(profileNames, async p => {
+    const nonDefault = await findAsync(profileNames, async (p) => {
         const provider = await manager.getCredentialsProvider(providerMap[p])
         return p !== defaultName && !!(await provider?.canAutoConnect())
     })

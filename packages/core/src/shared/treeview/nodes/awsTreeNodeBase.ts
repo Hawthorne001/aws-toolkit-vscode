@@ -4,12 +4,15 @@
  */
 
 import { TreeItem, TreeItemCollapsibleState, commands } from 'vscode'
-import { isCloud9 } from '../../extensionUtilities'
 
 export abstract class AWSTreeNodeBase extends TreeItem {
     public readonly regionCode?: string
     /** Service id as defined in the service model. May be undefined for child nodes. */
     public serviceId: string | undefined
+
+    public override toString(): string {
+        return `TreeItem(serviceId=${this.serviceId}, label=${this.label})`
+    }
 
     public constructor(label: string, collapsibleState?: TreeItemCollapsibleState) {
         super(label, collapsibleState)
@@ -20,10 +23,6 @@ export abstract class AWSTreeNodeBase extends TreeItem {
     }
 
     public refresh(): void {
-        if (isCloud9()) {
-            void commands.executeCommand('aws.refreshAwsExplorer', true)
-        } else {
-            void commands.executeCommand('aws.refreshAwsExplorerNode', this)
-        }
+        void commands.executeCommand('aws.refreshAwsExplorerNode', this)
     }
 }

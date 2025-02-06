@@ -12,8 +12,6 @@ import { isInlineCompletionEnabled } from '../util/commonUtil'
 import { application } from '../util/codeWhispererApplication'
 import { placeholder } from '../../shared/vscode/commands2'
 
-const performance = globalThis.performance ?? require('perf_hooks').performance
-
 /**
  * ReferenceInlineProvider
  */
@@ -25,7 +23,7 @@ export class ReferenceInlineProvider implements vscode.CodeLensProvider {
     public readonly onDidChangeCodeLenses: vscode.Event<void> = this._onDidChangeCodeLenses.event
 
     constructor() {
-        application().clearCodeWhispererUIListener(_ => {
+        application().clearCodeWhispererUIListener((_) => {
             this.removeInlineReference()
         })
     }
@@ -79,7 +77,7 @@ export class ReferenceInlineProvider implements vscode.CodeLensProvider {
             codeLens.command = {
                 title: this.refs[i],
                 tooltip: 'Reference code',
-                command: 'aws.codeWhisperer.openReferencePanel',
+                command: 'aws.amazonq.openReferencePanel',
                 arguments: [placeholder, 'codelens'],
             }
             codeLenses.push(codeLens)

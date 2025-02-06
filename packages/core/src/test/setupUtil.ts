@@ -11,6 +11,7 @@ import { hasKey } from '../shared/utilities/tsUtils'
 import { getTestWindow, printPendingUiElements } from './shared/vscode/window'
 import { ToolkitError, formatError } from '../shared/errors'
 import { proceedToBrowser } from '../auth/sso/model'
+import { decodeBase64 } from '../shared'
 
 const runnableTimeout = Symbol('runnableTimeout')
 
@@ -73,7 +74,7 @@ export function skipTest(testOrCtx: Mocha.Context | Mocha.Test | undefined, reas
 }
 
 export function skipSuite(suite: Mocha.Suite, reason?: string) {
-    suite.eachTest(test => skipTest(test, reason))
+    suite.eachTest((test) => skipTest(test, reason))
 }
 
 export function mapTestErrors(runner: Mocha.Runner, fn: (err: unknown, test: Mocha.Test) => any) {
@@ -156,7 +157,7 @@ export async function invokeLambda(id: string, request: unknown): Promise<unknow
             Payload: JSON.stringify(request),
         })
         .promise()
-        .catch(err => {
+        .catch((err) => {
             if (err instanceof Error) {
                 err.message = maskArns(err.message)
             }
@@ -164,7 +165,7 @@ export async function invokeLambda(id: string, request: unknown): Promise<unknow
         })
 
     if (response.LogResult) {
-        const logs = Buffer.from(response.LogResult, 'base64').toString()
+        const logs = decodeBase64(response.LogResult)
         getLogger().debug('lambda invocation logs: %s', maskArns(logs))
     } else {
         getLogger().debug('lambda invocation request id: %s', response.$response.requestId)
@@ -209,7 +210,7 @@ function maskArns(text: string) {
  * * `verificationUri` - the url to login with. This is returned by the device authorization flow.
  */
 export function registerAuthHook(secret: string, lambdaId = process.env['AUTH_UTIL_LAMBDA_ARN']) {
-    return getTestWindow().onDidShowMessage(message => {
+    return getTestWindow().onDidShowMessage((message) => {
         if (message.items[0].title.match(new RegExp(proceedToBrowser))) {
             if (!lambdaId) {
                 const baseMessage = 'Browser login flow was shown during testing without an authorizer function'
@@ -220,14 +221,18 @@ export function registerAuthHook(secret: string, lambdaId = process.env['AUTH_UT
                 }
             }
 
-            const openStub = patchObject(vscode.env, 'openExternal', async target => {
+            const openStub = patchObject(vscode.env, 'openExternal', async (target) => {
                 try {
-                    const url = new URL(target.toString(true))
-                    const userCode = url.searchParams.get('user_code')
+                    // Latest eg: 'https://nkomonen.awsapps.com/start/#/device?user_code=JXZC-NVRK'
+                    const urlString = target.toString(true)
 
-                    // TODO: Update this to just be the full URL if the authorizer lambda ever
-                    // supports the verification URI with user code embedded (VerificationUriComplete).
-                    const verificationUri = url.origin
+                    // Drop the user_code parameter since the auth lambda does not support it yet, and keeping it
+                    // would trigger a slightly different UI flow which breaks the automation.
+                    // TODO: If the auth lambda supports user_code in the parameters then we can skip this step
+                    const verificationUri = urlString.split('?')[0]
+
+                    const params = urlString.split('?')[1]
+                    const userCode = new URLSearchParams(params).get('user_code')
 
                     await invokeLambda(lambdaId, {
                         secret,

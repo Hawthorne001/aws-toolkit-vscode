@@ -3,235 +3,210 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as vscode from 'vscode'
+/**
+ * This module contains shared code between the main extension and browser/web
+ * extension entrypoints.
+ *
+ * See `arch_develop.md` in `docs/` for more info.
+ */
+
+import vscode from 'vscode'
 import * as nls from 'vscode-nls'
 
-import * as codecatalyst from './codecatalyst/activation'
-import { activate as activateAwsExplorer } from './awsexplorer/activation'
-import { activate as activateCloudWatchLogs } from './cloudWatchLogs/activation'
-import { CredentialsProviderManager } from './auth/providers/credentialsProviderManager'
-import { SharedCredentialsProviderFactory } from './auth/providers/sharedCredentialsProviderFactory'
-import { activate as activateSchemas } from './eventSchemas/activation'
-import { activate as activateLambda } from './lambda/activation'
-import { activate as activateCloudFormationTemplateRegistry } from './shared/cloudformation/activation'
-import { AwsContextCommands } from './shared/awsContextCommands'
-import {
-    getIdeProperties,
-    getToolkitEnvironmentDetails,
-    isCloud9,
-    isSageMaker,
-    showWelcomeMessage,
-} from './shared/extensionUtilities'
-import { getLogger, Logger } from './shared/logger/logger'
-import { activate as activateEcr } from './ecr/activation'
-import { activate as activateEc2 } from './ec2/activation'
-import { activate as activateSam } from './shared/sam/activation'
-import { activate as activateS3 } from './s3/activation'
-import * as awsFiletypes from './shared/awsFiletypes'
-import { activate as activateApiGateway } from './apigateway/activation'
-import { activate as activateStepFunctions } from './stepFunctions/activation'
-import { activate as activateSsmDocument } from './ssmDocument/activation'
-import { activate as activateDynamicResources } from './dynamicResources/activation'
-import { activate as activateEcs } from './ecs/activation'
-import { activate as activateAppRunner } from './apprunner/activation'
-import { activate as activateIot } from './iot/activation'
-import { activate as activateDev } from './dev/activation'
-import { activate as activateApplicationComposer } from './applicationcomposer/activation'
-import { activate as activateRedshift } from './redshift/activation'
-import { activate as activateCWChat } from './amazonq/activation'
-import { activate as activateQGumby } from './amazonqGumby/activation'
-import { Ec2CredentialsProvider } from './auth/providers/ec2CredentialsProvider'
-import { EnvVarsCredentialsProvider } from './auth/providers/envVarsCredentialsProvider'
-import { EcsCredentialsProvider } from './auth/providers/ecsCredentialsProvider'
-import { SchemaService } from './shared/schemas'
-import { AwsResourceManager } from './dynamicResources/awsResourceManager'
-import globals from './shared/extensionGlobals'
-import { Experiments, Settings, showSettingsFailedMsg } from './shared/settings'
-import { isReleaseVersion } from './shared/vscode/env'
+import globals, { initialize, isWeb } from './shared/extensionGlobals'
+import { join } from 'path'
+import { Commands } from './shared/vscode/commands2'
+import { endpointsFileUrl, githubCreateIssueUrl, githubUrl } from './shared/constants'
+import { getIdeProperties, aboutExtension, getDocUrl } from './shared/extensionUtilities'
+import { logAndShowError, logAndShowWebviewError } from './shared/utilities/logAndShowUtils'
 import { telemetry } from './shared/telemetry/telemetry'
-import { Auth } from './auth/auth'
-import { initializeNetworkAgent } from './codewhisperer/client/agent'
-import { submitFeedback } from './feedback/vue/submitFeedback'
-import { activateShared, deactivateShared } from './extensionShared'
+import { openUrl } from './shared/utilities/vsCodeUtils'
+import { activateViewsShared } from './awsexplorer/activationShared'
+import fs from './shared/fs/fs'
+import * as errors from './shared/errors'
+import { activate as activateLogger } from './shared/logger/activation'
+import { initializeComputeRegion } from './shared/extensionUtilities'
+import { activate as activateTelemetry } from './shared/telemetry/activation'
+import { DefaultAwsContext } from './shared/awsContext'
+import { Settings } from './shared/settings'
+import { DefaultAWSClientBuilder } from './shared/awsClientBuilder'
+import { initialize as initializeAuth } from './auth/activation'
+import { LoginManager } from './auth/deprecated/loginManager'
+import { CredentialsStore } from './auth/credentials/store'
+import { initializeAwsCredentialsStatusBarItem } from './auth/ui/statusBarItem'
+import { RegionProvider, getEndpointsFromFetcher } from './shared/regions/regionProvider'
+import { getMachineId, isAutomation } from './shared/vscode/env'
+import { registerCommandErrorHandler } from './shared/vscode/commands2'
+import { registerWebviewErrorHandler } from './webviews/server'
+import { ExtContext, VSCODE_EXTENSION_ID } from './shared/extensions'
+import { getSamCliContext } from './shared/sam/cli/samCliContext'
+import { UriHandler } from './shared/vscode/uriHandler'
+import { disableAwsSdkWarning } from './shared/awsClientBuilder'
+import { FileResourceFetcher } from './shared/resourcefetcher/fileResourceFetcher'
+import { ResourceFetcher } from './shared/resourcefetcher/resourcefetcher'
+import { registerCommands } from './commands'
+
+// In web mode everything must be in a single file, so things like the endpoints file will not be available.
+// The following imports the endpoints file, which causes webpack to bundle it in the final output file
+import endpoints from '../resources/endpoints.json'
+import { getLogger, maybeShowMinVscodeWarning, setupUninstallHandler } from './shared'
+import { showViewLogsMessage } from './shared/utilities/messages'
+
+disableAwsSdkWarning()
 
 let localize: nls.LocalizeFunc
 
 /**
- * The entrypoint for the nodejs version of the toolkit
- *
- * **CONTRIBUTORS** If you are adding code to this function prioritize adding it to
- * {@link activateShared} if appropriate
+ * Activation/setup code that is shared by the regular (nodejs) extension AND web mode extension.
+ * Most setup code should live here, unless there is a reason not to.
  */
-export async function activate(context: vscode.ExtensionContext) {
-    const activationStartedOn = Date.now()
+export async function activateCommon(
+    context: vscode.ExtensionContext,
+    contextPrefix: string,
+    isWeb: boolean
+): Promise<ExtContext> {
     localize = nls.loadMessageBundle()
 
-    try {
-        // IMPORTANT: If you are doing setup that should also work in web mode (browser), it should be done in the function below
-        const extContext = await activateShared(context)
+    initialize(context, isWeb)
+    const homeDirLogs = await fs.init(context, (homeDir) => {
+        void showViewLogsMessage(`Invalid home directory (check $HOME): "${homeDir}"`)
+    })
+    errors.init(fs.getUsername(), isAutomation())
+    await initializeComputeRegion()
 
-        initializeNetworkAgent()
-        initializeCredentialsProviderManager()
+    globals.contextPrefix = '' // todo: disconnect supplied argument
 
-        const toolkitEnvDetails = getToolkitEnvironmentDetails()
-        // Splits environment details by new line, filter removes the empty string
-        toolkitEnvDetails
-            .split(/\r?\n/)
-            .filter(Boolean)
-            .forEach(line => getLogger().info(line))
+    registerCommandErrorHandler((info, error) => {
+        const defaultMessage = localize('AWS.generic.message.error', 'Failed to run command: {0}', info.id)
+        void logAndShowError(localize, error, info.id, defaultMessage)
+    })
 
-        globals.awsContextCommands = new AwsContextCommands(globals.regionProvider, Auth.instance)
-        globals.schemaService = new SchemaService()
-        globals.resourceManager = new AwsResourceManager(context)
+    registerWebviewErrorHandler((error: unknown, webviewId: string, command: string) => {
+        return logAndShowWebviewError(localize, error, webviewId, command)
+    })
 
-        const settings = Settings.instance
-        const experiments = Experiments.instance
+    // Setup the logger
+    const toolkitOutputChannel = vscode.window.createOutputChannel('AWS Toolkit', { log: true })
+    const toolkitLogChannel = vscode.window.createOutputChannel('AWS Toolkit Logs', { log: true })
+    await activateLogger(context, contextPrefix, toolkitLogChannel, toolkitOutputChannel)
+    globals.outputChannel = toolkitOutputChannel
+    globals.logOutputChannel = toolkitLogChannel
 
-        experiments.onDidChange(({ key }) => {
-            telemetry.aws_experimentActivation.run(span => {
-                // Record the key prior to reading the setting as `get` may throw
-                span.record({ experimentId: key })
-                span.record({ experimentState: experiments.get(key) ? 'activated' : 'deactivated' })
-            })
+    if (homeDirLogs.length > 0) {
+        getLogger().error('fs.init: invalid home directory given by env vars: %O', homeDirLogs)
+    }
+
+    void maybeShowMinVscodeWarning('1.83.0')
+
+    // setup globals
+    globals.machineId = await getMachineId()
+    globals.awsContext = new DefaultAwsContext()
+    globals.sdkClientBuilder = new DefaultAWSClientBuilder(globals.awsContext)
+    globals.loginManager = new LoginManager(globals.awsContext, new CredentialsStore())
+
+    // order matters here
+    globals.manifestPaths.endpoints = context.asAbsolutePath(join('resources', 'endpoints.json'))
+    globals.manifestPaths.lambdaSampleRequests = context.asAbsolutePath(
+        join('resources', 'vs-lambda-sample-request-manifest.xml')
+    )
+    globals.regionProvider = RegionProvider.fromEndpointsProvider(makeEndpointsProvider())
+
+    // telemetry
+    await activateTelemetry(context, globals.awsContext, Settings.instance, 'AWS Toolkit For VS Code')
+
+    // Create this now, but don't call vscode.window.registerUriHandler() until after all
+    // Toolkit services have a chance to register their path handlers. #4105
+    globals.uriHandler = new UriHandler()
+
+    // Generic extension commands
+    registerGenericCommands(context, contextPrefix)
+
+    // Toolkit specific commands
+    registerCommands(context)
+    context.subscriptions.push(
+        // No-op command used for decoration-only codelenses.
+        vscode.commands.registerCommand('aws.doNothingCommand', () => {}),
+        // "Show AWS Commands..."
+        Commands.register('aws.listCommands', () =>
+            vscode.commands.executeCommand('workbench.action.quickOpen', `> ${getIdeProperties().company}:`)
+        ),
+        // register URLs in extension menu
+        Commands.register(`aws.toolkit.help`, async () => {
+            void openUrl(getDocUrl())
+            telemetry.aws_help.emit()
         })
+    )
 
-        await globals.schemaService.start()
-        awsFiletypes.activate()
+    // Handle AWS Toolkit un-installation.
+    setupUninstallHandler(VSCODE_EXTENSION_ID.awstoolkit, context.extension.id, context)
 
-        try {
-            await activateDev(context)
-        } catch (error) {
-            getLogger().debug(`Developer Tools (internal): failed to activate: ${(error as Error).message}`)
-        }
+    // auth
+    await initializeAuth(globals.loginManager)
+    await initializeAwsCredentialsStatusBarItem(globals.awsContext, context)
 
-        context.subscriptions.push(submitFeedback.register(context))
+    const extContext: ExtContext = {
+        extensionContext: context,
+        awsContext: globals.awsContext,
+        samCliContext: getSamCliContext,
+        regionProvider: globals.regionProvider,
+        outputChannel: globals.outputChannel,
+        telemetryService: globals.telemetry,
+        uriHandler: globals.uriHandler,
+        credentialsStore: globals.loginManager.store,
+    }
 
-        // do not enable codecatalyst for sagemaker
-        // TODO: remove setContext if SageMaker adds the context to their IDE
-        if (!isSageMaker()) {
-            await vscode.commands.executeCommand('setContext', 'aws.isSageMaker', false)
-            await codecatalyst.activate(extContext)
-        } else {
-            await vscode.commands.executeCommand('setContext', 'aws.isSageMaker', true)
-        }
+    await activateViewsShared(extContext.extensionContext)
 
-        await activateCloudFormationTemplateRegistry(context)
+    return extContext
+}
 
-        await activateAwsExplorer({
-            context: extContext,
-            regionProvider: globals.regionProvider,
-            toolkitOutputChannel: globals.outputChannel,
-            remoteInvokeOutputChannel: globals.invokeOutputChannel,
+/** Deactivation code that is shared between nodejs and web implementations */
+export async function deactivateCommon() {
+    await globals.telemetry.shutdown()
+}
+/**
+ * Registers generic commands used by both web and node versions of the toolkit.
+ */
+export function registerGenericCommands(extensionContext: vscode.ExtensionContext, contextPrefix: string) {
+    extensionContext.subscriptions.push(
+        // register URLs in extension menu
+        Commands.register(`aws.${contextPrefix}.github`, async () => {
+            void openUrl(vscode.Uri.parse(githubUrl))
+            telemetry.aws_showExtensionSource.emit()
+        }),
+        Commands.register(`aws.${contextPrefix}.createIssueOnGitHub`, async () => {
+            void openUrl(vscode.Uri.parse(githubCreateIssueUrl))
+            telemetry.aws_reportPluginIssue.emit()
+        }),
+        Commands.register(`aws.${contextPrefix}.aboutExtension`, async () => {
+            await aboutExtension()
         })
+    )
+}
 
-        await activateAppRunner(extContext)
+/**
+ * Returns an object that provides AWS service endpoints that the toolkit supports.
+ *
+ * https://docs.aws.amazon.com/general/latest/gr/rande.html
+ */
+export function makeEndpointsProvider() {
+    let localManifestFetcher: ResourceFetcher<string>
+    let remoteManifestFetcher: ResourceFetcher<Response>
+    if (isWeb()) {
+        localManifestFetcher = { get: async () => JSON.stringify(endpoints) }
+        // Cannot use HttpResourceFetcher due to web mode breaking on import
+        remoteManifestFetcher = { get: async () => await fetch(endpointsFileUrl) }
+    } else {
+        localManifestFetcher = new FileResourceFetcher(globals.manifestPaths.endpoints)
+        // HACK: HttpResourceFetcher breaks web mode when imported, so we use webpack.IgnorePlugin()
+        // to exclude it from the bundle.
+        // TODO: Make HttpResourceFetcher web mode compatible
+        const { HttpResourceFetcher } = require('./shared/resourcefetcher/httpResourceFetcher')
+        remoteManifestFetcher = new HttpResourceFetcher(endpointsFileUrl, { showUrl: true })
+    }
 
-        await activateApiGateway({
-            extContext: extContext,
-            outputChannel: globals.invokeOutputChannel,
-        })
-
-        await activateLambda(extContext)
-
-        await activateSsmDocument(context, globals.awsContext, globals.regionProvider, globals.outputChannel)
-
-        await activateSam(extContext)
-
-        await activateS3(extContext)
-
-        await activateEc2(extContext)
-
-        await activateEcr(context)
-
-        await activateCloudWatchLogs(context, settings)
-
-        await activateDynamicResources(context)
-
-        await activateIot(extContext)
-
-        await activateEcs(extContext)
-
-        await activateSchemas(extContext)
-
-        if (!isCloud9()) {
-            if (!isSageMaker()) {
-                await activateCWChat(extContext.extensionContext)
-                await activateQGumby(extContext)
-            }
-            await activateApplicationComposer(context)
-        }
-
-        await activateStepFunctions(context, globals.awsContext, globals.outputChannel)
-
-        await activateRedshift(extContext)
-
-        context.subscriptions.push(
-            vscode.window.registerUriHandler({
-                handleUri: uri =>
-                    telemetry.runRoot(() => {
-                        telemetry.record({ source: 'UriHandler' })
-
-                        return globals.uriHandler.handleUri(uri)
-                    }),
-            })
-        )
-
-        showWelcomeMessage(context)
-
-        const settingsValid = await settings.isReadable()
-        if (!settingsValid) {
-            void showSettingsFailedMsg('read')
-        }
-        recordToolkitInitialization(activationStartedOn, settingsValid, getLogger())
-
-        if (!isReleaseVersion()) {
-            globals.telemetry.assertPassiveTelemetry(globals.didReload)
-        }
-    } catch (error) {
-        const stacktrace = (error as Error).stack?.split('\n')
-        // truncate if the stacktrace is unusually long
-        if (stacktrace !== undefined && stacktrace.length > 40) {
-            stacktrace.length = 40
-        }
-        getLogger('channel').error(
-            localize(
-                'AWS.channel.aws.toolkit.activation.error',
-                'Error Activating {0} Toolkit: {1} \n{2}',
-                getIdeProperties().company,
-                (error as Error).message,
-                stacktrace?.join('\n')
-            )
-        )
-        throw error
+    return {
+        local: () => getEndpointsFromFetcher(localManifestFetcher),
+        remote: () => getEndpointsFromFetcher(remoteManifestFetcher),
     }
 }
-
-export async function deactivate() {
-    await deactivateShared()
-    await globals.resourceManager.dispose()
-}
-
-function initializeCredentialsProviderManager() {
-    const manager = CredentialsProviderManager.getInstance()
-    manager.addProviderFactory(new SharedCredentialsProviderFactory())
-    manager.addProviders(new Ec2CredentialsProvider(), new EcsCredentialsProvider(), new EnvVarsCredentialsProvider())
-}
-
-function recordToolkitInitialization(activationStartedOn: number, settingsValid: boolean, logger?: Logger) {
-    try {
-        const activationFinishedOn = Date.now()
-        const duration = activationFinishedOn - activationStartedOn
-
-        if (settingsValid) {
-            telemetry.toolkit_init.emit({ duration, result: 'Succeeded' })
-        } else {
-            telemetry.toolkit_init.emit({ duration, result: 'Failed', reason: 'UserSettingsRead' })
-        }
-    } catch (err) {
-        logger?.error(err as Error)
-    }
-}
-
-// Unique extension entrypoint names, so that they can be obtained from the webpack bundle
-export const awsToolkitActivate = activate
-export const awsToolkitDeactivate = deactivate

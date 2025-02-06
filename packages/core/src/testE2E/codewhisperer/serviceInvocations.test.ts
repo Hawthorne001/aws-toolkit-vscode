@@ -6,7 +6,7 @@
 import assert from 'assert'
 import * as vscode from 'vscode'
 import * as path from 'path'
-import { setValidConnection, skiptTestIfNoValidConn } from '../util/codewhispererUtil'
+import { setValidConnection, skipTestIfNoValidConn } from '../util/connection'
 import { ConfigurationEntry } from '../../codewhisperer/models/model'
 import * as codewhispererClient from '../../codewhisperer/client/codewhisperer'
 import { RecommendationHandler } from '../../codewhisperer/service/recommendationHandler'
@@ -19,9 +19,10 @@ import { KeyStrokeHandler } from '../../codewhisperer/service/keyStrokeHandler'
 import { sleep } from '../../shared/utilities/timeoutUtils'
 import { invokeRecommendation } from '../../codewhisperer/commands/invokeRecommendation'
 import { getTestWorkspaceFolder } from '../../testInteg/integrationTestsUtilities'
-import { session } from '../../codewhisperer/util/codeWhispererSession'
+import { CodeWhispererSessionState } from '../../codewhisperer/util/codeWhispererSession'
 
 describe('CodeWhisperer service invocation', async function () {
+    const session = CodeWhispererSessionState.instance.getSession()
     let validConnection: boolean
     const client = new codewhispererClient.DefaultCodeWhispererClient()
     const config: ConfigurationEntry = {
@@ -38,12 +39,12 @@ describe('CodeWhisperer service invocation', async function () {
     beforeEach(function () {
         void resetCodeWhispererGlobalVariables()
         RecommendationHandler.instance.clearRecommendations()
-        //valid connection required to run tests
-        skiptTestIfNoValidConn(validConnection, this)
+        // valid connection required to run tests
+        skipTestIfNoValidConn(validConnection, this)
     })
 
     it('manual trigger returns valid recommendation response', async function () {
-        //check that handler is empty before invocation
+        // check that handler is empty before invocation
         const requestIdBefore = RecommendationHandler.instance.requestId
         const sessionIdBefore = session.sessionId
         const validRecsBefore = RecommendationHandler.instance.isValidResponse()
@@ -65,7 +66,7 @@ describe('CodeWhisperer service invocation', async function () {
     })
 
     it('auto trigger returns valid recommendation response', async function () {
-        //check that handler is empty before invocation
+        // check that handler is empty before invocation
         const requestIdBefore = RecommendationHandler.instance.requestId
         const sessionIdBefore = session.sessionId
         const validRecsBefore = RecommendationHandler.instance.isValidResponse()
@@ -83,7 +84,7 @@ describe('CodeWhisperer service invocation', async function () {
         )
 
         await KeyStrokeHandler.instance.processKeyStroke(mockEvent, mockEditor, client, config)
-        //wait for 5 seconds to allow time for response to be generated
+        // wait for 5 seconds to allow time for response to be generated
         await sleep(5000)
 
         const requestId = RecommendationHandler.instance.requestId
@@ -100,7 +101,7 @@ describe('CodeWhisperer service invocation', async function () {
         const appRoot = path.join(workspaceFolder, 'go1-plain-sam-app')
         const appCodePath = path.join(appRoot, 'hello-world', 'main.go')
 
-        //check that handler is empty before invocation
+        // check that handler is empty before invocation
         const requestIdBefore = RecommendationHandler.instance.requestId
         const sessionIdBefore = session.sessionId
         const validRecsBefore = RecommendationHandler.instance.isValidResponse()

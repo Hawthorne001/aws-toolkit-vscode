@@ -10,8 +10,8 @@ import { TelemetryService } from '../../shared/telemetry/telemetryService'
 import { localize } from '../../shared/utilities/vsCodeUtils'
 import { VueWebview, VueWebviewPanel } from '../../webviews/main'
 import { telemetry } from '../../shared/telemetry/telemetry'
-import { Commands, VsCodeCommandArg, placeholder } from '../../shared/vscode/commands2'
-import { transformByQState } from '../../codewhisperer/models/model'
+import { Commands, RegisteredCommand, VsCodeCommandArg, placeholder } from '../../shared/vscode/commands2'
+import { i18n } from '../../shared/i18n-helper'
 
 export interface FeedbackMessage {
     comment: string
@@ -22,7 +22,12 @@ export class FeedbackWebview extends VueWebview {
     public static readonly sourcePath: string = 'src/feedback/vue/index.js'
     public readonly id = 'submitFeedback'
 
-    public constructor(private readonly telemetry: TelemetryService, private readonly feedbackName: string) {
+    public constructor(
+        private readonly telemetry: TelemetryService,
+        private readonly feedbackName: string,
+        /** Arbitrary caller-defined data appended to comment when sending the feedback request. */
+        private commentData?: string
+    ) {
         super(FeedbackWebview.sourcePath)
     }
     public async getFeedbackName(): Promise<string | void> {
@@ -36,9 +41,8 @@ export class FeedbackWebview extends VueWebview {
             return 'Choose a reaction (smile/frown)'
         }
 
-        const jobId = transformByQState.getJobId()
-        if (jobId !== '') {
-            message.comment = `${message.comment}\n\nQ CodeTransform jobId: ${jobId}`
+        if (this.commentData) {
+            message.comment = `${message.comment}\n\n${this.commentData}`
         }
 
         try {
@@ -67,24 +71,49 @@ export class FeedbackWebview extends VueWebview {
     }
 }
 
-type FeedbackId = 'AWS Toolkit' | 'CodeWhisperer' | 'Amazon Q' | 'Application Composer'
+type FeedbackId = 'AWS Toolkit' | 'Amazon Q' | 'Infrastructure Composer' | 'Threat Composer'
 
-export const submitFeedback = Commands.declare(
-    { id: 'aws.submitFeedback', autoconnect: false },
-    (context: vscode.ExtensionContext) => async (_: VsCodeCommandArg, id: FeedbackId) => {
-        if (_ !== placeholder) {
-            // No args exist, we must supply them
-            id = 'AWS Toolkit'
-        }
-        await showFeedbackView(context, id)
+let _submitFeedback:
+    | RegisteredCommand<(_: VsCodeCommandArg, id: FeedbackId, commentData?: string) => Promise<void>>
+    | undefined
+
+/**
+ * @param id Feedback name
+ * @param commentData Arbitrary caller-defined data appended to the comment when sending the
+ * feedback request.
+ */
+export function submitFeedback(_: VsCodeCommandArg, id: FeedbackId, commentData?: string) {
+    if (_submitFeedback === undefined) {
+        getLogger().error(
+            'Attempted to access "submitFeedback" command, but it was never initialized.' +
+                '\nThis should be initialized during extension activation.'
+        )
+        throw new Error(i18n('AWS.amazonq.featureDev.error.submitFeedback'))
     }
-)
+    return _submitFeedback.execute(_, id, commentData)
+}
+
+export function registerSubmitFeedback(context: vscode.ExtensionContext, defaultId: FeedbackId, contextPrefix: string) {
+    _submitFeedback = Commands.register(
+        { id: `aws.${contextPrefix}.submitFeedback`, autoconnect: false },
+        async (_: VsCodeCommandArg, id: FeedbackId, commentData?: string) => {
+            if (_ !== placeholder) {
+                // No args exist, we must supply them
+                id = defaultId
+            }
+            await showFeedbackView(context, id, commentData)
+        }
+    )
+    getLogger().info(`initialized \'submitFeedback\' command with default feedback id: ${defaultId}`)
+
+    return _submitFeedback
+}
 
 let activeWebview: VueWebviewPanel | undefined
 
-export async function showFeedbackView(context: vscode.ExtensionContext, feedbackName: string) {
+export async function showFeedbackView(context: vscode.ExtensionContext, feedbackName: string, commentData?: string) {
     const Panel = VueWebview.compilePanel(FeedbackWebview)
-    activeWebview ??= new Panel(context, globals.telemetry, feedbackName)
+    activeWebview ??= new Panel(context, globals.telemetry, feedbackName, commentData)
 
     const webviewPanel = await activeWebview.show({
         title: localize('AWS.submitFeedback.title', 'Send Feedback'),

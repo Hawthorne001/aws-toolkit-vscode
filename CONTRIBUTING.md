@@ -29,7 +29,8 @@ To develop this project, install these dependencies:
 -   [Git](https://git-scm.com/downloads)
     -   (optional) Set `git blame` to ignore noise-commits: `git config blame.ignoreRevsFile .git-blame-ignore-revs`
 -   [AWS `git secrets`](https://github.com/awslabs/git-secrets)
--   (required for Web mode) [TypeScript + Webpack Problem Matcher](https://marketplace.visualstudio.com/items?itemName=amodio.tsl-problem-matcher)
+-   [TypeScript + Webpack Problem Matcher](https://marketplace.visualstudio.com/items?itemName=amodio.tsl-problem-matcher)
+    -   Not installing will result in the following error during building: `Error: Invalid problemMatcher reference: $ts-webpack-watch`
 -   (optional) [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html)
 -   (optional) [Docker](https://docs.docker.com/get-docker/)
 
@@ -131,8 +132,8 @@ You can also use these NPM tasks (see `npm run` for the full list):
 
     1. Declare a global unhandledRejection handler.
         ```ts
-        process.on('unhandledRejection', e => {
-            getLogger('channel').error(
+        process.on('unhandledRejection', (e) => {
+            getLogger().error(
                 localize(
                     'AWS.channel.aws.toolkit.activation.error',
                     'Error Activating {0} Toolkit: {1}',
@@ -187,11 +188,11 @@ To run a single test in VSCode, do any one of:
 
     -   Unix/macOS/POSIX shell:
         ```
-        TEST_FILE=src/test/foo.test.ts npm run test
+        TEST_FILE=../core/src/test/foo.test.ts npm run test
         ```
     -   Powershell:
         ```
-        $Env:TEST_FILE = "src/test/foo.test.ts"; npm run test
+        $Env:TEST_FILE = "../core/src/test/foo.test.ts"; npm run test
         ```
 
 -   To run all tests in a particular subdirectory, you can edit
@@ -208,21 +209,26 @@ To run tests against a specific folder in VSCode, do any one of:
 -   Run in your terminal
     -   Unix/macOS/POSIX shell:
         ```
-        TEST_DIR=src/test/foo npm run test
+        TEST_DIR=../core/src/test/foo npm run test
         ```
     -   Powershell:
         ```
-        $Env:TEST_DIR = "src/test/foo"; npm run test
+        $Env:TEST_DIR = "../core/src/test/foo"; npm run test
         ```
+
+#### Run jscpd ("Copy-Paste Detection")
+
+If the "Copy-Paste Detection" CI job fails, you will find it useful to check things locally. To
+check a specific file:
+
+    npx jscpd --config .github/workflows/jscpd.json --pattern packages/…/src/foo.ts
+
+See the [jscpd cli documentation](https://github.com/kucherenko/jscpd/tree/master/apps/jscpd) for
+more options.
 
 ### Coverage report
 
-You can find the coverage report at `./coverage/index.html` after running the tests. Tests ran from the workspace launch config won't generate a coverage report automatically because it can break file watching. A few manual steps are needed instead:
-
--   Run the command `Tasks: Run Build Task` if not already active
--   Instrument built code with `npm run instrument`
--   Exercise the code (`Extension Tests`, `Integration Tests`, etc.)
--   Generate a report with `npm run report`
+You can find the coverage report at `./coverage/amazonq/lcov-report/index.html` and `./coverage/toolkit/lcov-report/index.html` after running the tests. Tests ran from the workspace launch config won't generate a coverage report automatically because it can break file watching.
 
 ### CodeCatalyst Blueprints
 
@@ -232,9 +238,12 @@ You can find documentation to create VSCode IDE settings for CodeCatalyst bluepr
 
 Before sending a pull request:
 
+1. Treat all work as PUBLIC. Private `feature/x` branches will _not_ be squash-merged at release time. This has several benefits:
+    - Avoids mistakes (accidental exposure to public)!
+    - Avoids needing to erase (squash-merge) history.
 1. Check that you are working against the latest source on the `master` branch.
-2. Check existing open, and recently merged, pull requests to make sure someone else hasn't addressed the problem already.
-3. Open an issue to discuss any significant work.
+1. Check existing open, and recently merged, pull requests to make sure someone else hasn't addressed the problem already.
+1. Open an issue to discuss any significant work.
 
 To send a pull request:
 
@@ -248,57 +257,85 @@ To send a pull request:
 
 ### Changelog
 
-Pull requests that change **customer-impacting behavior** must include a changelog item(s). Run this command:
+Pull requests that change **customer-impacting behavior** must include a changelog item(s). Run one
+or both of the following commands:
 
-    npm run newChange
+-   For changes relevant to Amazon Q:
+    ```
+    npm run newChange -w packages/amazonq
+    ```
+-   For changes relevant to AWS Toolkit:
+    ```
+    npm run newChange -w packages/toolkit
+    ```
 
+The audience for the changelog is _the user_. The changelog is presented to users by VSCode and the
+marketplace. It is a "micro-blog" for advertising improvements to users. It is the _primary_ way of
+communicating changes to customers. Please consider this when writing changelog entries.
 
+Mentioning low-level details like "function x now takes argument y", will not be useful, because it
+doesn't say what that means in terms of the user experience. Instead, describe the effect from the
+user's point of view.
 
 > [!TIP]
 >
 > -   Describe the change in a way that is _meaningful to the customer_. If you can't describe the _customer impact_ then it probably shouldn't be in the changelog.
->     -   ❌ `Update telemetry definitions` (not customer-impacting)
+>     -   ✅ `Connection wizard sometimes shows the old (stale) connection`
 >     -   ✅ `Faster startup after VSCode restarts`
 >     -   ❌ `Remove the cache when the connection wizard is re-launched` (code internals are not relevant to customers)
->     -   ✅ `Connection wizard sometimes shows the old (stale) connection`
-> -   "Bug Fix" changes should describe the _problem being fixed_. This tends to produce simpler,
->     more-intuitive descriptions. It's redundant to say "Fixed" in the description, because the
->     generated changelog will say that. Example:
+>     -   ❌ `Update telemetry definitions` (not customer-impacting)
+> -   "Bug Fix" changes should describe the _problem being fixed_. Don't say "Fixed" in the
+>     description, it's redundant. Example:
 >     -   ❌ `Fixed S3 bug which caused filenames to be uppercase`
 >     -   ✅ `S3 filenames are always uppercase`
 > -   To update an _existing_ changelog item, just edit its `.changes/next-release/….json` file, you don't need to re-run `npm run newChange`.
 > -   If there are multiple unrelated changes, run `npm run newChange` for each change.
 > -   Include the feature that the change affects, Q, CodeWhisperer, etc.
 
+### Pull request title
 
-### Commit messages
+The title of your pull request must follow this format (checked by [lintcommit.js](.github/workflows/lintcommit.js)):
 
-Generally your PR description should be a copy-paste of your commit message(s).
-If your PR description provides insight and context, that also should exist in
-the commit message. Source control (Git) is our source-of-truth, not GitHub.
+-   format: `type(scope): subject...`
+-   type: must be a valid type (`build`, `ci`, `config`, `deps`, `docs`, `feat`, `fix`, `perf`, `refactor`, `style`, `telemetry`, `test`, `types`)
+    -   see [lintcommit.js](.github/workflows/lintcommit.js))
+    -   "chore" is intentionally rejected because it tends to be over-used.
+    -   user-facing changes should always choose "feat" or "fix", and include a [changelog](#changelog) item.
+-   scope: lowercase, <30 chars
+-   subject: must be <100 chars
 
-Follow these [commit message guidelines](https://cbea.ms/git-commit/):
+### Pull request description
 
--   Subject: single line up to 50-72 characters
-    -   Imperative voice ("Fix bug", not "Fixed"/"Fixes"/"Fixing").
--   Body: for non-trivial or uncommon changes, explain your motivation for the
-    change and contrast your implementation with previous behavior.
-    -   Often you can save a _lot_ of words by using this simple template:
-        ```
-        Problem: …
-        Solution: …
-        ```
+Your PR description should provide a brief "Problem" and "Solution" pair. This
+structure often gives much more clarity, more concisely, than a typical
+paragraph of explanation.
 
-A [good commit message](https://git-scm.com/book/en/v2/Distributed-Git-Contributing-to-a-Project)
-has a short subject line and unlimited detail in the body.
+    Problem:
+    Foo does nothing when user clicks it.
+
+    Solution:
+    - Listen to the click event.
+    - Emit telemetry on success/failure.
+
 [Good explanations](https://nav.al/explanations) are acts of creativity. The
 "tiny subject line" constraint reminds you to clarify the essence of the
 commit, and makes the log easy for humans to scan. The commit log is an
 artifact that will outlive most code.
 
-Prefix the subject with `type(topic):` ([conventional
-commits](https://www.conventionalcommits.org/) format): this again helps humans
-(and scripts) scan and omit ranges of the history at a glance.
+### Commit messages
+
+Source control (Git) is our source-of-truth, not GitHub. However since most PRs
+are squash-merged, it's most important that your [pull request description](#pull-request-description)
+is well-formed so that the merged commit has the relevant info.
+
+If you expect your commits to be preserved ("regular merge"), then follow [these
+guidelines](https://cbea.ms/git-commit/):
+
+-   Subject: single line up to 50-72 characters
+    -   Imperative voice ("Fix bug", not "Fixed"/"Fixes"/"Fixing").
+    -   [Formatted as `type(scope): subject...`](#pull-request-title).
+        -   Helps humans _and_ scripts scan and omit ranges of the history at a glance.
+-   Body: describe the change as a [Problem/Solution pair](#pull-request-description).
 
 ## Tooling
 
@@ -317,22 +354,40 @@ The `aws.dev.forceDevMode` setting enables or disables Toolkit "dev mode". Witho
 
 ### Logging
 
--   Use the `aws.dev.logfile` setting to set the logfile path to a fixed location, so you can easily
-    follow and filter the logfile using shell tools like `tail` and `grep`. For example in
-    settings.json,
-    ```
-    "aws.dev.logfile": "~/awstoolkit.log",
-    ```
-    then you can tail the logfile in your terminal:
-    ```
-    tail -F ~/awstoolkit.log
-    ```
+-   Use `getLogger()` to log debugging messages, warnings, etc.
+    -   Example: `getLogger().error('topic: widget failed: %O', { foo: 'bar', baz: 42 })`
+-   Log messages are written to the extension Output channel, which you can view in vscode by visiting the "Output" panel and selecting `AWS Toolkit Logs` or `Amazon Q Logs`.
+-   Use the `aws.dev.logfile` setting to set the logfile path to a fixed location, so you can follow
+    and filter logs using shell tools like `tail` and `grep`.
+    -   Note: this always logs at **debug log-level** (though you can temporarily override that from the `AWS Toolkit Logs` UI).
+    -   Example `settings.json`:
+        ```
+        "aws.dev.logfile": "~/awstoolkit.log",
+        ```
+        then you can tail the logfile in your terminal:
+        ```
+        tail -F ~/awstoolkit.log
+        ```
 -   Use the `AWS (Developer): Watch Logs` command to watch and filter Toolkit logs (including
     telemetry) in VSCode.
     -   Only available if you enabled "dev mode" (`aws.dev.forceDevMode` setting, see above).
-    -   Sets `aws.logLevel` to "debug".
     -   Enter text in the Debug Console filter box to show only log messages with that text. <br/>
         <img src="./docs/images/debug-console-filter.png" alt="VSCode Debug Console" width="320"/>
+
+#### Enabling Debug Logs
+
+How to enable more detailed debug logs in the extensions.
+If you need to report an issue attach these to give the most detailed information.
+
+1. Open the Command Palette (`cmd/ctrl` + `shift` + `p`), then search for "View Logs". Choose the correct option for the extension you want, eg: `AWS: View Logs` or `Amazon Q: View Logs`
+   ![](./docs/images/logsView.png)
+2. Click the gear icon on the bottom right and select `Debug`
+   ![](./docs/images/logsSetDebug.png)
+3. Click the gear icon again and select `Set As Default`. This will ensure we stay in `Debug` until explicitly changed
+   ![](./docs/images/logsSetDefault.png)
+4. Open the Command Palette again and select `Reload Window`.
+5. Now you should see additional `[debug]` prefixed logs in the output.
+   ![](./docs/images/logsDebugLog.png)
 
 ### Telemetry
 
@@ -460,6 +515,8 @@ The package.json 'devDependencies' includes `eslint-plugin-aws-toolkits`. This i
 3. Register your rule in `plugins/eslint-plugin-aws-toolkits/index.ts`.
 4. Enable your rule in `.eslintrc`.
 
+Writing lint rules can be tricky if you are unfamiliar with the process. Use an AST viewer such as https://astexplorer.net/
+
 ### AWS SDK generator
 
 When the AWS SDK does not (yet) support a service but you have an API
@@ -520,7 +577,13 @@ requests just from the model/types.
 
 ### Webview dev-server
 
-Webviews can be hot-reloaded (updated without restarting the extension) by running a developer server provided by webpack. This server is started automatically when running the `Extension` launch configuration. You can also start it by running `npm serve`. Note that only frontend components will be updated; if you change backend code you will still need to restart the development extension.
+Webviews can be refreshed to show changes to `.vue` code when running in Debug mode. You do not have to
+reload the Debug VS Code window.
+
+-   Use `Command Palette` -> `Reload Webviews`
+-   Only the frontend `.vue` changes will be reflected. If changing any backend code you must restart Debug mode.
+
+This works by continuously building the final Vue webview files (`webpack watch`) and then serving them through a local server (`webpack serve`). Whenever a webview is loaded it will grab the latest build from the server.
 
 ### Font generation
 
@@ -529,7 +592,7 @@ For extensions to contribute their own codicons, VSCode requires a font file as 
 As a simple example, let's say I wanted to add a new icon for CloudWatch log streams. I would do the following:
 
 1. Place the icon in `resources/icons/aws/cloudwatch`. I'l name the icon `log-stream.svg`.
-1. Use `npm run generatePackage` to update `package.json`. Commit this change with the new icon.
+1. Use `npm run generateIcons` to update `package.json`. Commit this change with the new icon.
 1. You can now use the icon in the Toolkit:
 
     ```ts
@@ -539,8 +602,7 @@ As a simple example, let's say I wanted to add a new icon for CloudWatch log str
 ### VSCode Marketplace
 
 The [marketplace page](https://marketplace.visualstudio.com/itemdetails?itemName=AmazonWebServices.aws-toolkit-vscode)
-is defined in `README.quickstart.vscode.md` (which replaces `README.md` during
-the release automation). The `vsce` package tool always [replaces relative image paths](https://github.com/microsoft/vscode-vsce/blob/9478dbd11ea2e7adb23ec72923e889c7bb215263/src/package.ts#L885)
+is defined in `packages/toolkit/README.md`. The `vsce` package tool always [replaces relative image paths](https://github.com/microsoft/vscode-vsce/blob/9478dbd11ea2e7adb23ec72923e889c7bb215263/src/package.ts#L885)
 with URLs pointing to `HEAD` on GitHub (`https://github.com/aws/aws-toolkit-vscode/raw/HEAD/…/foo.gif`).
 
 Note therefore:
@@ -571,7 +633,7 @@ If you are contribuing visual assets from other open source repos, the source re
 ## Using new vscode APIs
 
 The minimum required vscode version specified in [package.json](https://github.com/aws/aws-toolkit-vscode/blob/07119655109bb06105a3f53bbcd86b812b32cdbe/package.json#L16)
-is decided by the version of vscode running in Cloud9 and other vscode-compatible targets.
+is decided by the version of vscode running in other supported vscode-compatible targets (e.g. web).
 
 But you can still use the latest vscode APIs, by checking the current running vscode version. For example, to use a vscode 1.64 API:
 

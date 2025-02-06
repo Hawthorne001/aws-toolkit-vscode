@@ -8,7 +8,7 @@ import { deleteCloudFormation } from '../lambda/commands/deleteCloudFormation'
 import { CloudFormationStackNode } from '../lambda/explorer/cloudFormationNodes'
 import globals from '../shared/extensionGlobals'
 import { isCloud9, isSageMaker } from '../shared/extensionUtilities'
-import { ExtContext } from '../shared/extensions'
+import { ExtContext, VSCODE_EXTENSION_ID } from '../shared/extensions'
 import { getLogger } from '../shared/logger'
 import { RegionProvider } from '../shared/regions/regionProvider'
 import { AWSResourceNode } from '../shared/treeview/nodes/awsResourceNode'
@@ -23,13 +23,19 @@ import { loadMoreChildrenCommand } from './commands/loadMoreChildren'
 import { checkExplorerForDefaultRegion } from './defaultRegion'
 import { ToolView } from './toolView'
 import { telemetry } from '../shared/telemetry/telemetry'
-import { cdkNode, refreshCdkExplorer } from '../cdk/explorer/rootNode'
+import { CdkRootNode } from '../awsService/cdk/explorer/rootNode'
 import { CodeCatalystRootNode } from '../codecatalyst/explorer'
 import { CodeCatalystAuthenticationProvider } from '../codecatalyst/auth'
-import { S3FolderNode } from '../s3/explorer/s3FolderNode'
-import { amazonQNode, refreshAmazonQ, refreshAmazonQRootNode } from '../amazonq/explorer/amazonQTreeNode'
-import { GlobalState } from '../shared/globalState'
+import { S3FolderNode } from '../awsService/s3/explorer/s3FolderNode'
+import { AmazonQNode, refreshAmazonQ, refreshAmazonQRootNode } from '../amazonq/explorer/amazonQTreeNode'
 import { activateViewsShared, registerToolView } from './activationShared'
+import { isExtensionInstalled } from '../shared/utilities'
+import { CommonAuthViewProvider } from '../login/webview'
+import { setContext } from '../shared'
+import { TreeNode } from '../shared/treeview/resourceTreeDataProvider'
+import { getSourceNode } from '../shared/utilities/treeNodeUtils'
+import { openAwsCFNConsoleCommand, openAwsConsoleCommand } from '../shared/awsConsole'
+import { StackNameNode } from '../awsService/appBuilder/explorer/nodes/deployedStack'
 
 /**
  * Activates the AWS Explorer UI and related functionality.
@@ -41,7 +47,6 @@ export async function activate(args: {
     context: ExtContext
     regionProvider: RegionProvider
     toolkitOutputChannel: vscode.OutputChannel
-    remoteInvokeOutputChannel: vscode.OutputChannel
 }): Promise<void> {
     const awsExplorer = new AwsExplorer(globals.context, args.regionProvider)
 
@@ -49,9 +54,9 @@ export async function activate(args: {
         treeDataProvider: awsExplorer,
         showCollapseAll: true,
     })
-    view.onDidExpandElement(element => {
+    view.onDidExpandElement((element) => {
         if (element.element instanceof S3FolderNode) {
-            GlobalState.instance.tryUpdate('aws.lastTouchedS3Folder', {
+            globals.globalState.tryUpdate('aws.lastTouchedS3Folder', {
                 bucket: element.element.bucket,
                 folder: element.element.folder,
             })
@@ -67,7 +72,7 @@ export async function activate(args: {
     telemetry.vscode_activeRegions.emit({ value: args.regionProvider.getExplorerRegions().length })
 
     args.context.extensionContext.subscriptions.push(
-        args.context.awsContext.onDidChangeContext(async credentialsChangedEvent => {
+        args.context.awsContext.onDidChangeContext(async (credentialsChangedEvent) => {
             getLogger().verbose(`Credentials changed (${credentialsChangedEvent.profileName}), updating AWS Explorer`)
             awsExplorer.refresh()
 
@@ -88,7 +93,7 @@ export async function activate(args: {
             nodes: [codecatalystNode],
             view: 'aws.codecatalyst',
             refreshCommands: [
-                provider => {
+                (provider) => {
                     codecatalystNode!.addRefreshEmitter(() => provider.refresh())
                 },
             ],
@@ -105,21 +110,43 @@ export async function activate(args: {
     )
 
     const amazonQViewNode: ToolView[] = []
-    if (!isCloud9()) {
-        amazonQViewNode.push({
-            nodes: [amazonQNode],
-            view: 'aws.amazonq.codewhisperer',
-            refreshCommands: [refreshAmazonQ, refreshAmazonQRootNode],
-        })
+    if (
+        isExtensionInstalled(VSCODE_EXTENSION_ID.amazonq) ||
+        globals.globalState.get<boolean>('aws.toolkit.amazonq.dismissed')
+    ) {
+        await setContext('aws.toolkit.amazonq.dismissed', true)
     }
+
+    // We should create the tree even if it's dismissed, in case the user installs Amazon Q later.
+    amazonQViewNode.push({
+        nodes: [AmazonQNode.instance],
+        view: 'aws.amazonq.codewhisperer',
+        refreshCommands: [refreshAmazonQ, refreshAmazonQRootNode],
+    })
+
     const viewNodes: ToolView[] = [
         ...amazonQViewNode,
         ...codecatalystViewNode,
-        { nodes: [cdkNode], view: 'aws.cdk', refreshCommands: [refreshCdkExplorer] },
+        { nodes: [CdkRootNode.instance], view: 'aws.cdk', refreshCommands: [CdkRootNode.instance.refreshCdkExplorer] },
     ]
     for (const viewNode of viewNodes) {
         registerToolView(viewNode, args.context.extensionContext)
     }
+
+    const toolkitAuthProvider = new CommonAuthViewProvider(args.context.extensionContext, 'toolkit')
+    args.context.extensionContext.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(toolkitAuthProvider.viewType, toolkitAuthProvider, {
+            webviewOptions: {
+                retainContextWhenHidden: true,
+            },
+        }),
+        // Hacky way for a webview to call setLoginService().
+        vscode.commands.registerCommand('aws.explorer.setLoginService', (serviceToShow?: string) => {
+            if (toolkitAuthProvider.webView && 'setLoginService' in toolkitAuthProvider.webView.server) {
+                toolkitAuthProvider.webView.server.setLoginService(serviceToShow)
+            }
+        })
+    )
 }
 
 async function registerAwsExplorerCommands(
@@ -172,8 +199,21 @@ async function registerAwsExplorerCommands(
                     isPreviewAndRender: true,
                 })
         ),
-        Commands.register('aws.copyArn', async (node: AWSResourceNode) => await copyTextCommand(node, 'ARN')),
-        Commands.register('aws.copyName', async (node: AWSResourceNode) => await copyTextCommand(node, 'name')),
+        Commands.register('aws.copyArn', async (node: AWSResourceNode | TreeNode) => {
+            const sourceNode = getSourceNode<AWSResourceNode>(node)
+            await copyTextCommand(sourceNode, 'ARN')
+        }),
+        Commands.register('aws.copyName', async (node: AWSResourceNode | TreeNode) => {
+            const sourceNode = getSourceNode<AWSResourceNode>(node)
+            await copyTextCommand(sourceNode, 'name')
+        }),
+        Commands.register('aws.openAwsConsole', async (node: AWSResourceNode | TreeNode) => {
+            const sourceNode = getSourceNode<AWSResourceNode>(node)
+            await openAwsConsoleCommand(sourceNode)
+        }),
+        Commands.register('aws.openAwsCFNConsole', async (node: StackNameNode) => {
+            await openAwsCFNConsoleCommand(node)
+        }),
         Commands.register('aws.refreshAwsExplorerNode', async (element: AWSTreeNodeBase | undefined) => {
             awsExplorer.refresh(element)
         }),

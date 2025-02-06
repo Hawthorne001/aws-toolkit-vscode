@@ -12,7 +12,16 @@ import { VSCODE_EXTENSION_ID, extensionAlphaVersion } from './extensions'
 import { Ec2MetadataClient } from './clients/ec2MetadataClient'
 import { DefaultEc2MetadataClient } from './clients/ec2MetadataClient'
 import { extensionVersion, getCodeCatalystDevEnvId } from './vscode/env'
-import { DevSettings } from './settings'
+import globals from './extensionGlobals'
+import { once } from './utilities/functionUtils'
+import {
+    apprunnerCreateServiceDocUrl,
+    debugNewSamAppDocUrl,
+    documentationUrl,
+    launchConfigDocUrl,
+    samDeployDocUrl,
+    samInitDocUrl,
+} from './constants'
 
 const localize = nls.loadMessageBundle()
 
@@ -22,38 +31,50 @@ const cloud9CnAppname = 'Amazon Cloud9'
 const sageMakerAppname = 'SageMaker Code Editor'
 const notInitialized = 'notInitialized'
 
-export const mostRecentVersionKey: string = 'globalsMostRecentVersion'
+function _isAmazonQ() {
+    const id = globals.context.extension.id
+    const isToolkit = id === VSCODE_EXTENSION_ID.awstoolkit
+    const isQ = id === VSCODE_EXTENSION_ID.amazonq
+    if (!isToolkit && !isQ) {
+        throw Error(`unexpected extension id: ${id}`) // sanity check
+    }
+    return isQ
+}
 
-export enum IDE {
-    vscode,
-    cloud9,
-    sagemaker,
-    unknown,
+/** True if the current extension is "Amazon Q", else the current extension is "AWS Toolkit". */
+export const isAmazonQ = once(_isAmazonQ)
+
+export function productName() {
+    return isAmazonQ() ? 'Amazon Q' : `${getIdeProperties().company} Toolkit`
+}
+
+export const getExtensionId = () => {
+    return isAmazonQ() ? VSCODE_EXTENSION_ID.amazonq : VSCODE_EXTENSION_ID.awstoolkit
+}
+
+/** Gets the "AWS" or "Amazon Q" prefix (in package.json: `commands.category`). */
+export function commandsPrefix(): string {
+    return isAmazonQ() ? 'Amazon Q' : getIdeProperties().company
 }
 
 let computeRegion: string | undefined = notInitialized
 
-export function getIdeType(): IDE {
-    const settings = DevSettings.instance
-    if (
-        vscode.env.appName === cloud9Appname ||
-        vscode.env.appName === cloud9CnAppname ||
-        settings.get('forceCloud9', false)
-    ) {
-        return IDE.cloud9
+export function getIdeType(): 'vscode' | 'cloud9' | 'sagemaker' | 'unknown' {
+    if (vscode.env.appName === cloud9Appname || vscode.env.appName === cloud9CnAppname) {
+        return 'cloud9'
     }
 
     if (vscode.env.appName === sageMakerAppname) {
-        return IDE.sagemaker
+        return 'sagemaker'
     }
 
     // Theia doesn't necessarily have all env properties
     // so we should be defensive and assume appName is nullable.
     if (vscode.env.appName?.startsWith(vscodeAppname)) {
-        return IDE.vscode
+        return 'vscode'
     }
 
-    return IDE.unknown
+    return 'unknown'
 }
 
 interface IdeProperties {
@@ -78,12 +99,12 @@ export function getIdeProperties(): IdeProperties {
     }
 
     switch (getIdeType()) {
-        case IDE.cloud9:
+        case 'cloud9':
             if (isCn()) {
                 return createCloud9Properties(localize('AWS.title.cn', 'Amazon'))
             }
             return createCloud9Properties(company)
-        case IDE.sagemaker:
+        case 'sagemaker':
             if (isCn()) {
                 // check for cn region
                 return createSageMakerProperties(localize('AWS.title.cn', 'Amazon'))
@@ -121,7 +142,7 @@ function createCloud9Properties(company: string): IdeProperties {
  * Decides if the current system is (the specified flavor of) Cloud9.
  */
 export function isCloud9(flavor: 'classic' | 'codecatalyst' | 'any' = 'any'): boolean {
-    const cloud9 = getIdeType() === IDE.cloud9
+    const cloud9 = getIdeType() === 'cloud9'
     if (!cloud9 || flavor === 'any') {
         return cloud9
     }
@@ -138,30 +159,6 @@ export function isCn(): boolean {
 }
 
 /**
- * Applies function `getFn` to `obj` and returns the result, or fails silently.
- *
- * Example:
- *
- *     function blah(value?: SomeObject) {
- *       safeGet(value, x => x.propertyOfSomeObject)
- *     }
- *
- * @param obj the object to attempt the get function on
- * @param getFn the function to use to determine the mapping value
- */
-export function safeGet<O, T>(obj: O | undefined, getFn: (x: O) => T): T | undefined {
-    if (obj) {
-        try {
-            return getFn(obj)
-        } catch (error) {
-            // ignore
-        }
-    }
-
-    return undefined
-}
-
-/**
  * Utility function to determine if the extension version has changed between activations
  * False (versions are identical) if version key exists in global state and matches the current version
  * True (versions are different) if any of the above aren't true
@@ -172,8 +169,8 @@ export function safeGet<O, T>(obj: O | undefined, getFn: (x: O) => T): T | undef
  * @param context VS Code Extension Context
  * @param currVersion Current version to compare stored most recent version against (useful for tests)
  */
-export function isDifferentVersion(context: vscode.ExtensionContext, currVersion: string = extensionVersion): boolean {
-    const mostRecentVersion = context.globalState.get<string>(mostRecentVersionKey)
+export function isDifferentVersion(currVersion: string = extensionVersion): boolean {
+    const mostRecentVersion = globals.globalState.tryGet('globalsMostRecentVersion', String)
     if (mostRecentVersion && mostRecentVersion === currVersion) {
         return false
     }
@@ -187,8 +184,8 @@ export function isDifferentVersion(context: vscode.ExtensionContext, currVersion
  *
  * @param context VS Code Extension Context
  */
-export function setMostRecentVersion(context: vscode.ExtensionContext): void {
-    context.globalState.update(mostRecentVersionKey, extensionVersion).then(undefined, e => {
+export function setMostRecentVersion(): void {
+    globals.globalState.update('globalsMostRecentVersion', extensionVersion).then(undefined, (e) => {
         getLogger().error('globalState.update() failed: %s', (e as Error).message)
     })
 }
@@ -233,15 +230,15 @@ export function showWelcomeMessage(context: vscode.ExtensionContext): void {
         void vscode.window.showWarningMessage(
             localize(
                 'AWS.startup.toastIfAlpha',
-                '{0} Toolkit PREVIEW. (To get the latest STABLE version, uninstall this version.)',
-                getIdeProperties().company
+                '{0} PREVIEW. (To get the latest STABLE version, uninstall this version.)',
+                productName()
             )
         )
         return
     }
     try {
-        if (isDifferentVersion(context)) {
-            setMostRecentVersion(context)
+        if (isDifferentVersion()) {
+            setMostRecentVersion()
             if (!isCloud9()) {
                 void promptQuickstart()
             }
@@ -252,23 +249,44 @@ export function showWelcomeMessage(context: vscode.ExtensionContext): void {
     }
 }
 
+function _getDocumentationUrl(urls: { cloud9: vscode.Uri; toolkit: vscode.Uri }): vscode.Uri {
+    return isCloud9() ? urls.cloud9 : urls.toolkit
+}
+export function getDocUrl() {
+    return _getDocumentationUrl(documentationUrl)
+}
+export function getSamInitDocUrl() {
+    return _getDocumentationUrl(samInitDocUrl)
+}
+export function getLaunchConfigDocUrl() {
+    return _getDocumentationUrl(launchConfigDocUrl)
+}
+export function getSamDeployDocUrl() {
+    return _getDocumentationUrl(samDeployDocUrl)
+}
+export function getDebugNewSamAppDocUrl() {
+    return _getDocumentationUrl(debugNewSamAppDocUrl)
+}
+export function getAppRunnerCreateServiceDocUrl() {
+    return _getDocumentationUrl(apprunnerCreateServiceDocUrl)
+}
+
 /**
  * Shows info about the extension and its environment.
  */
-export async function aboutToolkit(): Promise<void> {
-    const toolkitEnvDetails = getToolkitEnvironmentDetails()
+export async function aboutExtension(): Promise<void> {
+    const extEnvDetails = getExtEnvironmentDetails()
     const copyButtonLabel = localize('AWS.message.prompt.copyButtonLabel', 'Copy')
-    const result = await vscode.window.showInformationMessage(toolkitEnvDetails, { modal: true }, copyButtonLabel)
+    const result = await vscode.window.showInformationMessage(extEnvDetails, { modal: true }, copyButtonLabel)
     if (result === copyButtonLabel) {
-        void vscode.env.clipboard.writeText(toolkitEnvDetails)
+        void vscode.env.clipboard.writeText(extEnvDetails)
     }
 }
 
 /**
- * Returns a string that includes the OS, AWS Toolkit,
- * and VS Code versions.
+ * Returns a string that includes the OS, extension, and VS Code versions.
  */
-export function getToolkitEnvironmentDetails(): string {
+export function getExtEnvironmentDetails(): string {
     const osType = os.type()
     const osArch = os.arch()
     const osRelease = os.release()
@@ -278,13 +296,13 @@ export function getToolkitEnvironmentDetails(): string {
 
     const envDetails = localize(
         'AWS.message.toolkitInfo',
-        'OS: {0} {1} {2}\n{3} extension host:  {4}\n{5} Toolkit:  {6}\n{7}{8}',
+        'OS: {0} {1} {2}\n{3} extension host:  {4}\n{5}:  {6}\n{7}{8}',
         osType,
         osArch,
         osRelease,
         getIdeProperties().longName,
         vsCodeVersion,
-        getIdeProperties().company,
+        productName(),
         extensionVersion,
         node,
         electron
@@ -327,17 +345,19 @@ export function getComputeRegion(): string | undefined {
 }
 
 /**
- * Provides an {@link vscode.Event} that is triggered when the user interacts with the extension.
- * This will help to be notified of user activity.
+ * Provides a generic {@link vscode.Event} representing "user activity".
  */
-export class ExtensionUserActivity implements vscode.Disposable {
+export class UserActivity implements vscode.Disposable {
     private disposables: vscode.Disposable[] = []
     private activityEvent = new vscode.EventEmitter<void>()
-    /** The event that is triggered when the user interacts with the extension */
+    /** Event fired when user activity is detected. */
     onUserActivity = this.activityEvent.event
 
     /**
-     * @param delay The delay until a throttled user activity event is fired in milliseconds.
+     * @param delay Throttle delay (in milliseconds) for each source event kind. For example,
+     * `onDidChangeTextDocument` may fire only once per throttle interval, and any other source
+     * event such as `onDidChangeActiveTextEditor` is subject to its own, separate throttle
+     * interval.
      * @param customEvents For testing purposes. The events that trigger the user activity.
      * @returns
      */
@@ -346,20 +366,20 @@ export class ExtensionUserActivity implements vscode.Disposable {
         const throttledEmit = _.throttle(
             (event: vscode.Event<any>) => {
                 this.activityEvent.fire()
-                getLogger().debug(`ExtensionUserActivity: event fired "${event.name}"`)
+                getLogger().debug(`UserActivity: event fired "${event.name}"`)
             },
             delay,
             { leading: true, trailing: false }
         )
 
         if (customEvents) {
-            customEvents.forEach(event =>
+            for (const event of customEvents) {
                 this.register(
                     event(() => {
                         throttledEmit(event)
                     })
                 )
-            )
+            }
         } else {
             this.registerAllEvents(throttledEmit)
         }
@@ -368,21 +388,36 @@ export class ExtensionUserActivity implements vscode.Disposable {
     }
 
     /**
-     * Registers events that have conditions if they should even fire
+     * Creates handlers for all known events representing "user activity".
      */
     private registerAllEvents(throttledEmit: (e: vscode.Event<any>) => any) {
-        this.activityEvents.forEach(event =>
+        const activityEvents = [
+            vscode.window.onDidChangeActiveColorTheme,
+            vscode.window.onDidChangeActiveTextEditor,
+            vscode.window.onDidChangeActiveTerminal,
+            vscode.window.onDidChangeVisibleTextEditors,
+            vscode.window.onDidChangeTextEditorOptions,
+            vscode.window.onDidOpenTerminal,
+            vscode.window.onDidCloseTerminal,
+            vscode.window.onDidChangeTerminalState,
+            vscode.window.onDidChangeTextEditorViewColumn,
+        ]
+
+        for (const event of activityEvents) {
             this.register(
                 event(() => {
                     throttledEmit(event)
                 })
             )
-        )
+        }
 
-        /** ---- Events with edge cases ---- */
+        //
+        // Events with special cases:
+        //
+
         this.register(
-            vscode.window.onDidChangeWindowState(e => {
-                if ((e as any).active === false) {
+            vscode.window.onDidChangeWindowState((e) => {
+                if ((e as any).active === false || e.focused === false) {
                     return
                 }
                 throttledEmit(vscode.window.onDidChangeWindowState)
@@ -390,15 +425,10 @@ export class ExtensionUserActivity implements vscode.Disposable {
         )
 
         this.register(
-            vscode.workspace.onDidChangeTextDocument(e => {
-                // Our extension may change a file in the background (eg: log file)
-                const uriOfDocumentUserIsEditing = vscode.window.activeTextEditor?.document?.uri
-                if (!uriOfDocumentUserIsEditing) {
-                    // User was not editing any file themselves
-                    return
-                }
-                if (uriOfDocumentUserIsEditing !== e.document.uri) {
-                    // File changed was not the one the user was actively working on
+            vscode.workspace.onDidChangeTextDocument((e) => {
+                const activeUri = vscode.window.activeTextEditor?.document?.uri?.toString()
+                if (!activeUri || activeUri !== e.document.uri?.toString() || e.document.uri.scheme === 'output') {
+                    // User is not editing this document, or document is an Output channel.
                     return
                 }
                 throttledEmit(vscode.workspace.onDidChangeTextDocument)
@@ -406,9 +436,20 @@ export class ExtensionUserActivity implements vscode.Disposable {
         )
 
         this.register(
-            vscode.window.onDidChangeTextEditorSelection(e => {
+            vscode.workspace.onDidOpenTextDocument((e) => {
+                const activeUri = vscode.window.activeTextEditor?.document?.uri?.toString()
+                if (!activeUri || activeUri !== e.uri?.toString() || e.uri.scheme === 'output') {
+                    // User is not editing this document, or document is an Output channel.
+                    return
+                }
+                throttledEmit(vscode.workspace.onDidOpenTextDocument)
+            })
+        )
+
+        this.register(
+            vscode.window.onDidChangeTextEditorSelection((e) => {
                 if (e.textEditor.document.uri.scheme === 'output') {
-                    // Ignore `output` scheme as text editors from output panel autoscroll
+                    // Document is an Output channel, which may autoscroll.
                     return
                 }
                 throttledEmit(vscode.window.onDidChangeTextEditorSelection)
@@ -416,9 +457,9 @@ export class ExtensionUserActivity implements vscode.Disposable {
         )
 
         this.register(
-            vscode.window.onDidChangeTextEditorVisibleRanges(e => {
+            vscode.window.onDidChangeTextEditorVisibleRanges((e) => {
                 if (e.textEditor.document.uri.scheme === 'output') {
-                    // Ignore `output` scheme as text editors from output panel autoscroll
+                    // Document is an Output channel, which may autoscroll.
                     return
                 }
                 throttledEmit(vscode.window.onDidChangeTextEditorVisibleRanges)
@@ -426,24 +467,13 @@ export class ExtensionUserActivity implements vscode.Disposable {
         )
     }
 
-    private activityEvents: vscode.Event<any>[] = [
-        vscode.window.onDidChangeActiveColorTheme,
-        vscode.window.onDidChangeActiveTextEditor,
-        vscode.window.onDidChangeActiveTerminal,
-        vscode.window.onDidChangeVisibleTextEditors,
-        vscode.window.onDidChangeTextEditorOptions,
-        vscode.window.onDidOpenTerminal,
-        vscode.window.onDidCloseTerminal,
-        vscode.window.onDidChangeTerminalState,
-        vscode.window.onDidChangeTextEditorViewColumn,
-        vscode.workspace.onDidOpenTextDocument,
-    ]
-
     private register(disposable: vscode.Disposable) {
         this.disposables.push(disposable)
     }
 
     dispose() {
-        this.disposables.forEach(d => d.dispose())
+        for (const d of this.disposables) {
+            d.dispose()
+        }
     }
 }

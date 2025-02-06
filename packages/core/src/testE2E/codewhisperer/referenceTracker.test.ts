@@ -6,11 +6,11 @@
 import assert from 'assert'
 import * as codewhispererClient from '../../codewhisperer/client/codewhisperer'
 import { ConfigurationEntry } from '../../codewhisperer/models/model'
-import { setValidConnection, skiptTestIfNoValidConn } from '../util/codewhispererUtil'
+import { setValidConnection, skipTestIfNoValidConn } from '../util/connection'
 import { RecommendationHandler } from '../../codewhisperer/service/recommendationHandler'
 import { createMockTextEditor, resetCodeWhispererGlobalVariables } from '../../test/codewhisperer/testUtil'
 import { invokeRecommendation } from '../../codewhisperer/commands/invokeRecommendation'
-import { session } from '../../codewhisperer/util/codeWhispererSession'
+import { CodeWhispererSessionState } from '../../codewhisperer/util/codeWhispererSession'
 
 /*
 New model deployment may impact references returned. 
@@ -47,6 +47,7 @@ describe('CodeWhisperer service invocation', async function () {
         isAutomatedTriggerEnabled: true,
         isSuggestionsWithCodeReferencesEnabled: false,
     }
+    const session = CodeWhispererSessionState.instance.getSession()
 
     before(async function () {
         validConnection = await setValidConnection()
@@ -55,14 +56,14 @@ describe('CodeWhisperer service invocation', async function () {
     beforeEach(function () {
         void resetCodeWhispererGlobalVariables()
         RecommendationHandler.instance.clearRecommendations()
-        //TODO: remove this line (this.skip()) when these tests no longer auto-skipped
+        // TODO: remove this line (this.skip()) when these tests no longer auto-skipped
         this.skip()
-        //valid connection required to run tests
-        skiptTestIfNoValidConn(validConnection, this)
+        // valid connection required to run tests
+        skipTestIfNoValidConn(validConnection, this)
     })
 
     it('trigger known to return recs with references returns rec with reference', async function () {
-        //check that handler is empty before invocation
+        // check that handler is empty before invocation
         const requestIdBefore = RecommendationHandler.instance.requestId
         const sessionIdBefore = session.sessionId
         const validRecsBefore = RecommendationHandler.instance.isValidResponse()
@@ -89,13 +90,13 @@ describe('CodeWhisperer service invocation', async function () {
         assert.ok(sessionId.length > 0)
         assert.ok(validRecs)
         assert.ok(references !== undefined)
-        //TODO: uncomment this assert when this test is no longer auto-skipped
+        // TODO: uncomment this assert when this test is no longer auto-skipped
         // assert.ok(references.length > 0)
     })
 
-    //This test will fail if user is logged in with IAM identity center
+    // This test will fail if user is logged in with IAM identity center
     it('trigger known to return rec with references does not return rec with references when reference tracker setting is off', async function () {
-        //check that handler is empty before invocation
+        // check that handler is empty before invocation
         const requestIdBefore = RecommendationHandler.instance.requestId
         const sessionIdBefore = session.sessionId
         const validRecsBefore = RecommendationHandler.instance.isValidResponse()
@@ -119,7 +120,7 @@ describe('CodeWhisperer service invocation', async function () {
 
         assert.ok(requestId.length > 0)
         assert.ok(sessionId.length > 0)
-        //no recs returned because example request returns 1 rec with reference, so no recs returned when references off
+        // no recs returned because example request returns 1 rec with reference, so no recs returned when references off
         assert.ok(!validRecs)
     })
 })

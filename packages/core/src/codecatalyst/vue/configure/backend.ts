@@ -25,7 +25,6 @@ import { updateDevfileCommand } from '../../devfile'
 import { showViewLogsMessage } from '../../../shared/utilities/messages'
 import { isLongReconnect, removeReconnectionInformation, saveReconnectionInformation } from '../../reconnect'
 import { CodeCatalystClient, DevEnvironment } from '../../../shared/clients/codecatalystClient'
-import { isCloud9 } from '../../../shared/extensionUtilities'
 
 const localize = nls.loadMessageBundle()
 
@@ -114,7 +113,7 @@ export class CodeCatalystConfigureWebview extends VueWebview {
         const spaceName = this.devenv.summary.org.name
         const subscriptionType = await this.client
             .getSubscription({ spaceName })
-            .then(resp => (isValidSubscriptionType(resp.subscriptionType) ? resp.subscriptionType : 'FREE'))
+            .then((resp) => (isValidSubscriptionType(resp.subscriptionType) ? resp.subscriptionType : 'FREE'))
 
         async function prompt(prompter: Prompter<any>) {
             prompter.recentItem = settings[key]
@@ -165,7 +164,7 @@ export async function showConfigureDevEnv(
     activePanel ??= new Panel(ctx, client, devenv, commands)
     const webview = await activePanel.show({
         title: localize('AWS.view.configureDevEnv.title', 'Dev Environment Settings'),
-        viewColumn: isCloud9() ? vscode.ViewColumn.One : vscode.ViewColumn.Active,
+        viewColumn: vscode.ViewColumn.Active,
     })
 
     if (!subscriptions) {

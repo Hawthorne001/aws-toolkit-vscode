@@ -29,9 +29,9 @@ import {
     Profile,
     Section,
 } from '../credentials/sharedCredentials'
-import { builderIdStartUrl } from '../sso/model'
 import { SectionName, SharedCredentialsKeys } from '../credentials/types'
 import { SsoProfile, hasScopes, scopesSsoAccountAccess } from '../connection'
+import { builderIdStartUrl } from '../sso/constants'
 
 const credentialSources = {
     ECS_CONTAINER: 'EcsContainer',
@@ -64,7 +64,10 @@ export class SharedCredentialsProvider implements CredentialsProvider {
     private readonly section = getSectionOrThrow(this.sections, this.profileName, 'profile')
     private readonly profile = extractDataFromSection(this.section)
 
-    public constructor(private readonly profileName: string, private readonly sections: Section[]) {}
+    public constructor(
+        private readonly profileName: string,
+        private readonly sections: Section[]
+    ) {}
 
     public getCredentialsId(): CredentialsId {
         return {
@@ -104,7 +107,7 @@ export class SharedCredentialsProvider implements CredentialsProvider {
 
     public async canAutoConnect(): Promise<boolean> {
         if (isSsoProfile(this.profile)) {
-            const tokenProvider = new SsoAccessTokenProvider({
+            const tokenProvider = SsoAccessTokenProvider.create({
                 region: this.profile[SharedCredentialsKeys.SSO_REGION]!,
                 startUrl: this.profile[SharedCredentialsKeys.SSO_START_URL]!,
             })
@@ -163,7 +166,7 @@ export class SharedCredentialsProvider implements CredentialsProvider {
         return {
             type: 'sso',
             identifier: sessionName,
-            scopes: scopes?.split(',').map(s => s.trim()),
+            scopes: scopes?.split(',').map((s) => s.trim()),
             startUrl: sessionData[SharedCredentialsKeys.SSO_START_URL],
             ssoRegion: sessionData[SharedCredentialsKeys.SSO_REGION] ?? defaultRegion,
         }
@@ -273,7 +276,7 @@ export class SharedCredentialsProvider implements CredentialsProvider {
             profilesTraversed.push(profileName)
 
             // Missing reference
-            if (!this.sections.some(s => s.name === profileName && s.type === 'profile')) {
+            if (!this.sections.some((s) => s.name === profileName && s.type === 'profile')) {
                 return `Shared Credentials Profile ${profileName} not found. Reference chain: ${profilesTraversed.join(
                     ' -> '
                 )}`
@@ -353,7 +356,7 @@ export class SharedCredentialsProvider implements CredentialsProvider {
         }
 
         const region = ssoProfile.ssoRegion
-        const tokenProvider = new SsoAccessTokenProvider({ ...ssoProfile, region })
+        const tokenProvider = SsoAccessTokenProvider.create({ ...ssoProfile, region })
         const client = SsoClient.create(region, tokenProvider)
 
         return async () => {
@@ -392,13 +395,13 @@ export class SharedCredentialsProvider implements CredentialsProvider {
         // So the workaround is to do give the SDK the merged profiles directly
         const profileSections = this.sections.filter(isProfileSection)
         const profiles = toRecord(
-            profileSections.map(s => s.name),
-            k => this.getProfile(k)
+            profileSections.map((s) => s.name),
+            (k) => this.getProfile(k)
         )
 
         return fromIni({
             profile: this.profileName,
-            mfaCodeProvider: async mfaSerial => await getMfaTokenFromUser(mfaSerial, this.profileName),
+            mfaCodeProvider: async (mfaSerial) => await getMfaTokenFromUser(mfaSerial, this.profileName),
             roleAssumer: assumeRole,
             loadedConfig: Promise.resolve({
                 credentialsFile: loadedCreds ?? profiles,

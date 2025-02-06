@@ -3,76 +3,63 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ChatItemType, MynahUIDataModel } from '@aws/mynah-ui'
+import { ChatItemType, MynahUIDataModel, QuickActionCommandGroup } from '@aws/mynah-ui'
 import { TabType } from '../storages/tabsStorage'
 import { FollowUpGenerator } from '../followUps/generator'
 import { QuickActionGenerator } from '../quickActions/generator'
+import { TabTypeDataMap } from './constants'
+import { agentWalkthroughDataModel } from '../walkthrough/agent'
+import { FeatureContext } from '../../../../shared'
 
 export interface TabDataGeneratorProps {
     isFeatureDevEnabled: boolean
     isGumbyEnabled: boolean
+    isScanEnabled: boolean
+    isTestEnabled: boolean
+    isDocEnabled: boolean
+    disabledCommands?: string[]
+    commandHighlight?: FeatureContext
 }
 
 export class TabDataGenerator {
     private followUpsGenerator: FollowUpGenerator
     public quickActionsGenerator: QuickActionGenerator
-
-    private tabTitle: Map<TabType, string> = new Map([
-        ['unknown', 'Chat'],
-        ['cwc', 'Chat'],
-        ['featuredev', 'Q - Dev'],
-    ])
-
-    private tabInputPlaceholder: Map<TabType, string> = new Map([
-        ['unknown', 'Ask a question or enter "/" for quick actions'],
-        ['cwc', 'Ask a question or enter "/" for quick actions'],
-        ['featuredev', 'Briefly describe a task or issue'],
-    ])
-
-    private tabWelcomeMessage: Map<TabType, string> = new Map([
-        [
-            'unknown',
-            `Hi, I'm Amazon Q. I can answer your software development questions. 
-        Ask me to explain, debug, or optimize your code. 
-        You can enter \`/\` to see a list of quick actions.`,
-        ],
-        [
-            'cwc',
-            `Hi, I'm Amazon Q. I can answer your software development questions. 
-        Ask me to explain, debug, or optimize your code. 
-        You can enter \`/\` to see a list of quick actions.`,
-        ],
-        [
-            'featuredev',
-            `Welcome to /dev. 
-
-Here I can provide code suggestions across files in your current project.
-
-Before I begin generating code, let's agree on an implementation plan. What change would you like to make?
-`,
-        ],
-    ])
+    private highlightCommand?: FeatureContext
 
     constructor(props: TabDataGeneratorProps) {
         this.followUpsGenerator = new FollowUpGenerator()
         this.quickActionsGenerator = new QuickActionGenerator({
             isFeatureDevEnabled: props.isFeatureDevEnabled,
             isGumbyEnabled: props.isGumbyEnabled,
+            isScanEnabled: props.isScanEnabled,
+            isTestEnabled: props.isTestEnabled,
+            isDocEnabled: props.isDocEnabled,
+            disableCommands: props.disabledCommands,
         })
+        this.highlightCommand = props.commandHighlight
     }
 
     public getTabData(tabType: TabType, needWelcomeMessages: boolean, taskName?: string): MynahUIDataModel {
-        return {
-            tabTitle: taskName ?? this.tabTitle.get(tabType),
+        if (tabType === 'agentWalkthrough') {
+            return agentWalkthroughDataModel
+        }
+
+        if (tabType === 'welcome') {
+            return {}
+        }
+
+        const tabData: MynahUIDataModel = {
+            tabTitle: taskName ?? TabTypeDataMap[tabType].title,
             promptInputInfo:
-                'Use of Amazon Q is subject to the [AWS Responsible AI Policy](https://aws.amazon.com/machine-learning/responsible-ai/policy/).',
+                'Amazon Q Developer uses generative AI. You may need to verify responses. See the [AWS Responsible AI Policy](https://aws.amazon.com/machine-learning/responsible-ai/policy/).',
             quickActionCommands: this.quickActionsGenerator.generateForTab(tabType),
-            promptInputPlaceholder: this.tabInputPlaceholder.get(tabType),
+            promptInputPlaceholder: TabTypeDataMap[tabType].placeholder,
+            contextCommands: this.getContextCommands(tabType),
             chatItems: needWelcomeMessages
                 ? [
                       {
                           type: ChatItemType.ANSWER,
-                          body: this.tabWelcomeMessage.get(tabType),
+                          body: TabTypeDataMap[tabType].welcome,
                       },
                       {
                           type: ChatItemType.ANSWER,
@@ -80,6 +67,35 @@ Before I begin generating code, let's agree on an implementation plan. What chan
                       },
                   ]
                 : [],
+        }
+        return tabData
+    }
+
+    private getContextCommands(tabType: TabType): QuickActionCommandGroup[] | undefined {
+        if (tabType === 'agentWalkthrough' || tabType === 'welcome') {
+            return
+        }
+
+        const commandName = this.highlightCommand?.value.stringValue
+        if (commandName === undefined || commandName === '') {
+            return TabTypeDataMap[tabType].contextCommands
+        } else {
+            const commandHighlight: QuickActionCommandGroup = {
+                groupName: 'Additional Commands',
+                commands: [
+                    {
+                        command: commandName,
+                        description: this.highlightCommand?.variation,
+                    },
+                ],
+            }
+
+            const contextCommands = TabTypeDataMap[tabType].contextCommands
+            if (contextCommands === undefined) {
+                return [commandHighlight]
+            } else {
+                return [...contextCommands, commandHighlight]
+            }
         }
     }
 }

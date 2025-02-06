@@ -61,8 +61,8 @@ export async function getLambdaHandlerCandidates(document: vscode.TextDocument):
         )) ?? []
 
     return symbols
-        .filter(symbol => isValidFuncSignature(document, symbol))
-        .map<LambdaHandlerCandidate>(symbol => {
+        .filter((symbol) => isValidFuncSignature(document, symbol))
+        .map<LambdaHandlerCandidate>((symbol) => {
             return {
                 filename,
                 handlerName: basename(dirname(filename)),
@@ -126,6 +126,7 @@ function parseTypes(params: string): string[] {
     const paramParts = params.split(',')
 
     // Names of parameters must either be all present or all absent: https://golang.org/ref/spec#Function_types
+    // eslint-disable-next-line unicorn/no-array-for-each
     paramParts.forEach((element: string, i: number) => {
         const parts: string[] = element.trim().split(/\s+/)
         const type: string = parts.length > 1 ? parts[1].trim() : parts[0].trim()

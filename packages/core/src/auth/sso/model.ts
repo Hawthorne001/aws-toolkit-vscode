@@ -11,12 +11,11 @@ const localize = nls.loadMessageBundle()
 import * as vscode from 'vscode'
 import * as localizedText from '../../shared/localizedText'
 import { getLogger } from '../../shared/logger/logger'
-import { telemetry } from '../../shared/telemetry/telemetry'
 import { CancellationError } from '../../shared/utilities/timeoutUtils'
 import { ssoAuthHelpUrl } from '../../shared/constants'
 import { openUrl } from '../../shared/utilities/vsCodeUtils'
 import { ToolkitError } from '../../shared/errors'
-import { isCloud9 } from '../../shared/extensionUtilities'
+import { builderIdStartUrl } from './constants'
 
 export interface SsoToken {
     /**
@@ -46,6 +45,8 @@ export interface SsoToken {
     readonly refreshToken?: string
 }
 
+export type AuthenticationFlow = 'auth code' | 'web auth code'
+
 export interface ClientRegistration {
     /**
      * Unique registration id.
@@ -63,9 +64,19 @@ export interface ClientRegistration {
     readonly expiresAt: Date
 
     /**
+     * The start URL used to create this registration.
+     */
+    readonly startUrl: string
+
+    /**
      * Scope of the client registration. Applies to all tokens created using this registration.
      */
     readonly scopes?: string[]
+
+    /**
+     * The sso flow used to create this registration.
+     */
+    readonly flow?: AuthenticationFlow
 }
 
 export interface SsoProfile {
@@ -77,11 +88,10 @@ export interface SsoProfile {
     readonly identifier?: string
 }
 
-export const builderIdStartUrl = 'https://view.awsapps.com/start'
 export const trustedDomainCancellation = 'TrustedDomainCancellation'
 
 const tryOpenHelpUrl = (url: vscode.Uri) =>
-    openUrl(url).catch(e => getLogger().verbose('auth: failed to open help URL: %s', e))
+    openUrl(url).catch((e) => getLogger().verbose('auth: failed to open help URL: %s', e))
 
 export function truncateStartUrl(startUrl: string) {
     return startUrl.match(/https?:\/\/(.*)\.awsapps\.com\/start/)?.[1] ?? startUrl
@@ -103,25 +113,9 @@ export async function openSsoPortalLink(startUrl: string, authorization: Authori
         return vscode.Uri.parse(`${authorization.verificationUri}?user_code=${authorization.userCode}`)
     }
 
-    async function openSsoUrl() {
-        const ssoLoginUrl = makeConfirmCodeUrl(authorization)
-        const didOpenUrl = await vscode.env.openExternal(ssoLoginUrl)
-
-        if (!didOpenUrl) {
-            throw new ToolkitError(`User clicked 'Copy' or 'Cancel' during the Trusted Domain popup`, {
-                code: trustedDomainCancellation,
-                name: trustedDomainCancellation,
-            })
-        }
-        return didOpenUrl
-    }
-
     async function showLoginNotification() {
         const name = startUrl === builderIdStartUrl ? localizedText.builderId() : localizedText.iamIdentityCenterFull()
-        // C9 doesn't support `detail` field with modals so we need to put it all in the `title`
-        const title = isCloud9()
-            ? `Confirm Code "${authorization.userCode}" for ${name} in the browser.`
-            : localize('AWS.auth.loginWithBrowser.messageTitle', 'Confirm Code for {0}', name)
+        const title = localize('AWS.auth.loginWithBrowser.messageTitle', 'Confirm Code for {0}', name)
         const detail = localize(
             'AWS.auth.loginWithBrowser.messageDetail',
             'Confirm this code in the browser: {0}',
@@ -134,7 +128,7 @@ export async function openSsoPortalLink(startUrl: string, authorization: Authori
             const resp = await vscode.window.showInformationMessage(title, { modal: true, detail }, proceedToBrowser)
             switch (resp) {
                 case proceedToBrowser:
-                    return openSsoUrl()
+                    return openSsoUrl(makeConfirmCodeUrl(authorization))
                 case localizedText.help:
                     await tryOpenHelpUrl(ssoAuthHelpUrl)
                     continue
@@ -144,11 +138,28 @@ export async function openSsoPortalLink(startUrl: string, authorization: Authori
         }
     }
 
-    return telemetry.aws_loginWithBrowser.run(() => showLoginNotification())
+    return showLoginNotification()
+}
+
+export async function openSsoUrl(location: vscode.Uri) {
+    const didOpenUrl = await vscode.env.openExternal(location)
+
+    if (!didOpenUrl) {
+        throw new ToolkitError(`User clicked 'Copy' or 'Cancel' during the Trusted Domain popup`, {
+            code: trustedDomainCancellation,
+            name: trustedDomainCancellation,
+            cancelled: true,
+        })
+    }
+    return didOpenUrl
 }
 
 // Most SSO 'expirables' are fairly long lived, so a one minute buffer is plenty.
 const expirationBufferMs = 60000
 export function isExpired(expirable: { expiresAt: Date }): boolean {
     return globals.clock.Date.now() + expirationBufferMs >= expirable.expiresAt.getTime()
+}
+
+export function isDeprecatedAuth(registration: ClientRegistration): boolean {
+    return registration.flow === undefined || registration.flow !== 'auth code'
 }

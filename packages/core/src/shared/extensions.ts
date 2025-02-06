@@ -15,7 +15,6 @@ import { UriHandler } from './vscode/uriHandler'
 export const VSCODE_EXTENSION_ID = {
     awstoolkit: 'amazonwebservices.aws-toolkit-vscode',
     amazonq: 'amazonwebservices.amazon-q-vscode',
-    awstoolkitcore: 'amazonwebservices.aws-core-vscode', // Core "extension" for tests - not a real extension.
     python: 'ms-python.python',
     // python depends on jupyter plugin
     jupyter: 'ms-toolsai.jupyter',
@@ -32,9 +31,7 @@ export const vscodeExtensionMinVersion = {
     remotessh: '0.74.0',
 }
 
-/**
- * Long-lived, extension-scoped, shared globals.
- */
+/** @deprecated Use `extensionGlobals.ts:globals` instead. */
 export interface ExtContext {
     extensionContext: vscode.ExtensionContext
     awsContext: AwsContext
@@ -44,7 +41,6 @@ export interface ExtContext {
     telemetryService: TelemetryService
     credentialsStore: CredentialsStore
     uriHandler: UriHandler
-    invokeOutputChannel: vscode.OutputChannel
 }
 
 /**

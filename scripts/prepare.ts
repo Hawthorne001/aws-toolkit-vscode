@@ -13,7 +13,7 @@
 //  - Runs in the background. To see the output, run with "--foreground-scripts".
 //
 
-import * as child_process from 'child_process'
+import * as child_process from 'child_process' // eslint-disable-line no-restricted-imports
 
 /**
  * Returns true if the current build is running on CI (build server).
@@ -27,7 +27,7 @@ function main() {
         console.log('prepare: skipped (running in CI)')
         return
     }
-    child_process.execSync('husky install', { stdio: 'inherit' })
+    child_process.execSync('husky', { stdio: 'inherit' })
 }
 
 main()

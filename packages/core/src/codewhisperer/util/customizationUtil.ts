@@ -4,16 +4,9 @@
  */
 
 import globals from '../../shared/extensionGlobals'
-import {
-    customLearnMoreUri,
-    newCustomizationsAvailableKey,
-    newCustomizationMessage,
-    persistedCustomizationsKey,
-    selectedCustomizationKey,
-} from '../models/constants'
+import { customLearnMoreUri, newCustomizationMessage } from '../models/constants'
 import { localize, openUrl } from '../../shared/utilities/vsCodeUtils'
 import { AuthUtil } from './authUtil'
-import { set } from './commonUtil'
 import * as vscode from 'vscode'
 import { createCommonButtons } from '../../shared/ui/buttons'
 import { DataQuickPickItem, showQuickPick } from '../../shared/ui/pickerPrompter'
@@ -25,6 +18,7 @@ import { showMessageWithUrl } from '../../shared/utilities/messages'
 import { parse } from '@aws-sdk/util-arn-parser'
 import { Commands } from '../../shared/vscode/commands2'
 import { vsCodeState } from '../models/model'
+import { FeatureConfigProvider, Features } from '../../shared/featureConfig'
 
 /**
  *
@@ -33,7 +27,7 @@ import { vsCodeState } from '../models/model'
  */
 export const getNewCustomizations = (availableCustomizations: Customization[]) => {
     const persistedCustomizations = getPersistedCustomizations()
-    return availableCustomizations.filter(c => !persistedCustomizations.map(p => p.arn).includes(c.arn))
+    return availableCustomizations.filter((c) => !persistedCustomizations.map((p) => p.arn).includes(c.arn))
 }
 
 export async function notifyNewCustomizations() {
@@ -71,9 +65,9 @@ export async function notifyNewCustomizations() {
         'AWS.codewhisperer.customization.notification.new_customizations.learn_more',
         'Learn More'
     )
-    void vscode.window.showInformationMessage(newCustomizationMessage, select, learnMore).then(async resp => {
+    void vscode.window.showInformationMessage(newCustomizationMessage, select, learnMore).then(async (resp) => {
         if (resp === select) {
-            showCustomizationPrompt().catch(e => {
+            showCustomizationPrompt().catch((e) => {
                 getLogger().error('showCustomizationPrompt failed: %s', (e as Error).message)
             })
         } else if (resp === learnMore) {
@@ -85,18 +79,24 @@ export async function notifyNewCustomizations() {
 
 // Return true when either it's the default option or the selected one is in the ones we fetched from upstream.
 export const isSelectedCustomizationAvailable = (available: Customization[], selected: Customization) => {
-    return selected.arn === '' || available.map(c => c.arn).includes(selected.arn)
+    return selected.arn === '' || available.map((c) => c.arn).includes(selected.arn)
 }
 
 export const baseCustomization = {
     arn: '',
-    name: localize('AWS.codewhisperer.customization.base.label', 'CodeWhisperer foundation (Default)'),
+    name: localize('AWS.codewhisperer.customization.base.label', 'Amazon Q foundation (Default)'),
     description: localize(
         'AWS.codewhisperer.customization.base.detail',
-        'Receive suggestions from CodeWhisperer base model'
+        'Receive suggestions from Amazon Q base model'
     ),
 }
 
+/**
+ * Gets the customization that should be used for user requests. If a user has manually selected
+ * a customization, always respect that choice. If not, check if the user is part of an AB
+ * group assigned a specific customization. If so, use that customization. If not, use the
+ * base customization.
+ */
 export const getSelectedCustomization = (): Customization => {
     if (
         !AuthUtil.instance.isCustomizationFeatureEnabled ||
@@ -106,31 +106,57 @@ export const getSelectedCustomization = (): Customization => {
         return baseCustomization
     }
 
-    const selectedCustomizationArr =
-        globals.context.globalState.get<{ [label: string]: Customization }>(selectedCustomizationKey) || {}
-    return selectedCustomizationArr[AuthUtil.instance.conn.label] || baseCustomization
+    const selectedCustomizationArr = globals.globalState.tryGet<{ [label: string]: Customization }>(
+        'CODEWHISPERER_SELECTED_CUSTOMIZATION',
+        Object,
+        {}
+    )
+    const selectedCustomization = selectedCustomizationArr[AuthUtil.instance.conn.label]
+
+    if (selectedCustomization && selectedCustomization.name !== '') {
+        return selectedCustomization
+    } else {
+        const customizationFeature = FeatureConfigProvider.getFeature(Features.customizationArnOverride)
+        const arnOverride = customizationFeature?.value.stringValue
+        const customizationOverrideName = customizationFeature?.variation
+        if (arnOverride === undefined) {
+            return baseCustomization
+        } else {
+            return {
+                arn: arnOverride,
+                name: customizationOverrideName,
+                description: baseCustomization.description,
+            }
+        }
+    }
 }
 
 export const setSelectedCustomization = async (customization: Customization) => {
     if (!AuthUtil.instance.isValidEnterpriseSsoInUse() || !AuthUtil.instance.conn) {
         return
     }
-    const selectedCustomizationObj =
-        globals.context.globalState.get<{ [label: string]: Customization }>(selectedCustomizationKey) || {}
+    const selectedCustomizationObj = globals.globalState.tryGet<{ [label: string]: Customization }>(
+        'CODEWHISPERER_SELECTED_CUSTOMIZATION',
+        Object,
+        {}
+    )
     selectedCustomizationObj[AuthUtil.instance.conn.label] = customization
     getLogger().debug(`Selected customization ${customization.name} for ${AuthUtil.instance.conn.label}`)
 
-    await set(selectedCustomizationKey, selectedCustomizationObj, globals.context.globalState)
+    await globals.globalState.update('CODEWHISPERER_SELECTED_CUSTOMIZATION', selectedCustomizationObj)
     vsCodeState.isFreeTierLimitReached = false
-    await Commands.tryExecute('aws.codeWhisperer.refreshStatusBar')
+    await Commands.tryExecute('aws.amazonq.refreshStatusBar')
 }
 
 export const getPersistedCustomizations = (): Customization[] => {
     if (!AuthUtil.instance.isValidEnterpriseSsoInUse() || !AuthUtil.instance.conn) {
         return []
     }
-    const persistedCustomizationsObj =
-        globals.context.globalState.get<{ [label: string]: Customization[] }>(persistedCustomizationsKey) || {}
+    const persistedCustomizationsObj = globals.globalState.tryGet<{ [label: string]: Customization[] }>(
+        'CODEWHISPERER_PERSISTED_CUSTOMIZATIONS',
+        Object,
+        {}
+    )
     return persistedCustomizationsObj[AuthUtil.instance.conn.label] || []
 }
 
@@ -138,18 +164,21 @@ export const setPersistedCustomizations = async (customizations: Customization[]
     if (!AuthUtil.instance.isValidEnterpriseSsoInUse() || !AuthUtil.instance.conn) {
         return
     }
-    const persistedCustomizationsObj =
-        globals.context.globalState.get<{ [label: string]: Customization[] }>(persistedCustomizationsKey) || {}
+    const persistedCustomizationsObj = globals.globalState.tryGet<{ [label: string]: Customization[] }>(
+        'CODEWHISPERER_PERSISTED_CUSTOMIZATIONS',
+        Object,
+        {}
+    )
     persistedCustomizationsObj[AuthUtil.instance.conn.label] = customizations
-    await set(persistedCustomizationsKey, persistedCustomizationsObj, globals.context.globalState)
+    await globals.globalState.update('CODEWHISPERER_PERSISTED_CUSTOMIZATIONS', persistedCustomizationsObj)
 }
 
 export const getNewCustomizationsAvailable = () => {
-    return globals.context.globalState.get<number>(newCustomizationsAvailableKey) ?? 0
+    return globals.globalState.tryGet('aws.amazonq.codewhisperer.newCustomizations', Number, 0)
 }
 
 export const setNewCustomizationsAvailable = async (num: number) => {
-    await set(newCustomizationsAvailableKey, num, globals.context.globalState)
+    await globals.globalState.update('aws.amazonq.codewhisperer.newCustomizations', num)
     vsCodeState.isFreeTierLimitReached = false
 }
 
@@ -198,7 +227,7 @@ const createCustomizationItems = async () => {
         void showMessageWithUrl(
             localize(
                 'AWS.codewhisperer.customization.noCustomizations.description',
-                'You dont have access to any CodeWhisperer customization. Contact your admin for access.'
+                'You dont have access to any Amazon Q customization. Contact your admin for access.'
             ),
             customLearnMoreUri,
             localize('AWS.codewhisperer.customization.notification.new_customizations.learn_more', 'Learn More'),
@@ -207,7 +236,7 @@ const createCustomizationItems = async () => {
         return items
     }
 
-    const persistedArns = persistedCustomizations.map(c => c.arn)
+    const persistedArns = persistedCustomizations.map((c) => c.arn)
     const customizationNameToCount = availableCustomizations.reduce((map, customization) => {
         if (customization.name) {
             map.set(customization.name, (map.get(customization.name) || 0) + 1)
@@ -218,7 +247,7 @@ const createCustomizationItems = async () => {
 
     items.push(createBaseCustomizationItem())
     items.push(
-        ...availableCustomizations.map(c => {
+        ...availableCustomizations.map((c) => {
             let shouldPrefixAccountId = false
             if (c.name) {
                 const cnt = customizationNameToCount.get(c.name) || 0
@@ -236,7 +265,7 @@ const createCustomizationItems = async () => {
 const createBaseCustomizationItem = () => {
     const label = codicon`${getIcon('vscode-circuit-board')} ${localize(
         'AWS.codewhisperer.customization.base.label',
-        'CodeWhisperer foundation (Default)'
+        'Amazon Q foundation (Default)'
     )}`
     const selectedArn = getSelectedCustomization().arn
     return {
@@ -246,7 +275,7 @@ const createBaseCustomizationItem = () => {
         },
         detail: localize(
             'AWS.codewhisperer.customization.base.description',
-            'Receive suggestions from CodeWhisperer base model'
+            'Receive suggestions from Amazon Q base model'
         ),
         description: renderDescriptionText(label),
         recentlyUsed: selectedArn === baseCustomization.arn,
@@ -297,7 +326,7 @@ export const selectCustomization = async (customization: Customization) => {
     void vscode.window.showInformationMessage(
         localize(
             'AWS.codewhisperer.customization.selected.message',
-            'CodeWhisperer suggestions are now coming from the {0}',
+            'Amazon Q suggestions are now coming from the {0}',
             suffix
         )
     )
@@ -306,11 +335,11 @@ export const selectCustomization = async (customization: Customization) => {
 export const getAvailableCustomizationsList = async () => {
     const items: Customization[] = []
     const response = await codeWhispererClient.listAvailableCustomizations()
-    response
-        .map(listAvailableCustomizationsResponse => listAvailableCustomizationsResponse.customizations)
-        .forEach(customizations => {
-            items.push(...customizations)
-        })
+    for (const customizations of response.map(
+        (listAvailableCustomizationsResponse) => listAvailableCustomizationsResponse.customizations
+    )) {
+        items.push(...customizations)
+    }
 
     return items
 }
@@ -325,7 +354,7 @@ export const switchToBaseCustomizationAndNotify = async () => {
     const selection = await vscode.window.showWarningMessage(
         localize(
             'AWS.codewhisperer.customization.notification.selected_customization_not_available',
-            'Selected CodeWhisperer customization is not available. Contact your administrator. Your instance of CodeWhisperer is using the foundation model.'
+            'Selected Amazon Q customization is not available. Contact your administrator. Your instance of Amazon Q is using the foundation model.'
         ),
         selectCustomizationLabel
     )
